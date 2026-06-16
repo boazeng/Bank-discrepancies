@@ -60,10 +60,24 @@ from flask_cors import CORS
 # PROJECT_ROOT = the "Bank discrepancies" folder (parent of this backend dir)
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 
-# Load .env from project root
+# Load env vars. Resolution order:
+#   1. BANK_ENV_FILE env var (explicit path — used by the systemd unit in production)
+#   2. The shared central env folder next to the project (Aiprojects/env/.env — local dev)
+#   3. A local .env in the project root (fallback)
+# Real secrets live ONLY in one of these files on disk, never in git.
 try:
     from dotenv import load_dotenv
-    load_dotenv(PROJECT_ROOT / ".env")
+    _override = os.getenv("BANK_ENV_FILE")
+    _shared = PROJECT_ROOT.parent / "env" / ".env"
+    _local = PROJECT_ROOT / ".env"
+    if _override and Path(_override).exists():
+        _env_path = Path(_override)
+    elif _shared.exists():
+        _env_path = _shared
+    else:
+        _env_path = _local
+    load_dotenv(_env_path, override=True)
+    logger.info(f"env loaded from {_env_path}")
 except ImportError:
     pass
 
