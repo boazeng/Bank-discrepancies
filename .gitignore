@@ -14,3 +14,6 @@ node_modules/
 *.log
 server_*.txt
 server_*.log
+
+# Claude local settings
+.claude/
