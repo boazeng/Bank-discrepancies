@@ -4,18 +4,18 @@ After=network.target
 
 [Service]
 Type=simple
-User=ec2-user
-WorkingDirectory=/home/ec2-user/Bank-discrepancies
+User=ubuntu
+WorkingDirectory=/home/ubuntu/Bank-discrepancies
 
 # Real secrets live OUTSIDE the repo, in a central env folder (chmod 600).
 # The app reads this path first (see backend/server.py env resolution).
-Environment=BANK_ENV_FILE=/home/ec2-user/env/.env
-Environment=PATH=/home/ec2-user/Bank-discrepancies/.venv/bin:/usr/bin
+Environment=BANK_ENV_FILE=/home/ubuntu/env/.env
+Environment=PATH=/home/ubuntu/Bank-discrepancies/.venv/bin:/usr/bin
 
 # gunicorn serves the Flask app object `app` from backend/server.py.
 # Bind to localhost only — nginx is the public-facing reverse proxy.
-ExecStart=/home/ec2-user/Bank-discrepancies/.venv/bin/gunicorn \
-    --chdir /home/ec2-user/Bank-discrepancies/backend \
+ExecStart=/home/ubuntu/Bank-discrepancies/.venv/bin/gunicorn \
+    --chdir /home/ubuntu/Bank-discrepancies/backend \
     --bind 127.0.0.1:5000 \
     --workers 2 \
     --threads 4 \
