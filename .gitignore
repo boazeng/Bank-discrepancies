@@ -17,3 +17,6 @@ server_*.log
 
 # Claude local settings
 .claude/
+
+# Runtime state — data lives in the volume, not git
+database/receipts/*.json

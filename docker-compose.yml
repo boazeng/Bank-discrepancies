@@ -1,0 +1,18 @@
+# Bank Discrepancies on the Mac mini (OrbStack).
+# Exposed publicly via Cloudflare Tunnel: bank-discrepancies.newavera.co.il -> localhost:8092
+#
+#   cd ~/server/bank-discrepancies
+#   ~/.orbstack/bin/docker compose up -d
+#
+# Secrets: put PRIORITY_* in .env (not in git). Runtime state persists in ./database.
+services:
+  bank-discrepancies:
+    build: .
+    container_name: bank-discrepancies
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:8092:5000"   # localhost only — the tunnel connects locally
+    env_file:
+      - .env
+    volumes:
+      - ./database:/app/database   # persist JSON state across restarts/rebuilds

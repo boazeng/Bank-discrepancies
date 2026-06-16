@@ -1,0 +1,21 @@
+# Keep the image small: only backend/, database/*.py, dist/, requirements.txt
+.git
+.gitignore
+.gitattributes
+.venv
+node_modules
+__pycache__
+*.pyc
+*.pyo
+src
+public
+package.json
+package-lock.json
+vite.config.js
+index.html
+deploy
+*.md
+.claude
+.env
+# runtime state comes from the bind-mounted volume, not the image
+database/**/*.json
