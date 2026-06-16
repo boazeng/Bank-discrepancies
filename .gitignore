@@ -1,0 +1,16 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+
+# Environment (credentials — never commit)
+.env
+
+# Node
+node_modules/
+
+# Logs
+*.log
+server_*.txt
+server_*.log
