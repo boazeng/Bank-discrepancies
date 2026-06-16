@@ -11,8 +11,10 @@ supplierinvoice's 8000). The subdomain makes it feel standalone.
 
 ## Architecture
 
+Public URL: **https://bank-discrepancies.newavera.co.il**
+
 ```
-Cloudflare ──▶ nginx :443 (server_name bank.<domain>) ──▶ gunicorn 127.0.0.1:5000 ──▶ Flask (backend/server.py)
+Cloudflare ─▶ nginx :443 (bank-discrepancies.newavera.co.il) ─▶ gunicorn 127.0.0.1:5000 ─▶ Flask (backend/server.py)
                                                                                          └─ serves dist/ (Vite/React UI)
                                                                                          └─ proxies Priority OData API
 ```
@@ -54,9 +56,10 @@ REQUESTS_VERIFY_SSL=false
    It installs Python + nginx, creates the venv, installs deps (incl. gunicorn),
    seeds `~/env/.env` from the template, and installs the systemd + nginx configs.
 3. Fill in real secrets: `nano ~/env/.env`
-4. Set your real subdomain + cert in `/etc/nginx/conf.d/zz-bank.conf`, then:
+4. The nginx config already targets `bank-discrepancies.newavera.co.il`. Issue/confirm
+   the cert, then reload:
    ```bash
-   sudo certbot --nginx -d bank.<your-domain>     # if a dedicated cert is needed
+   sudo certbot --nginx -d bank-discrepancies.newavera.co.il   # if a dedicated cert is needed
    sudo nginx -t && sudo systemctl reload nginx
    ```
 5. Start it:
@@ -68,9 +71,11 @@ REQUESTS_VERIFY_SSL=false
 
 ## Subdomain / DNS (do later, as planned)
 
-- Add a DNS record (Cloudflare or Route53) for `bank.<your-domain>` → the EC2 public IP
-  (proxied through Cloudflare, like bookkeeping.newavera.co.il).
-- Update `server_name` in `deploy/nginx-bank.conf` (and on the box) to match.
+- Cloudflare DNS record: type `A`, name `bank-discrepancies`, value = the EC2 public IP
+  (same IP as the `bookkeeping` record), **Proxied** (orange cloud) — like
+  bookkeeping.newavera.co.il.
+- `server_name` in `deploy/nginx-bank.conf` is already set to
+  `bank-discrepancies.newavera.co.il`.
 
 ## Updating after a code change
 
