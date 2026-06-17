@@ -814,6 +814,15 @@ export default function BankPage() {
   return (
     <div className="receipts-page" dir="rtl">
       <div className="receipts-container">
+
+        <header className="app-header">
+          <img src="/logo.jpg" alt="Urban Group" className="app-header-logo" />
+          <div className="app-header-text">
+            <span className="app-header-company">קבוצה אורבנית</span>
+            <span className="app-header-subtitle">תוכנת עזר לרישומי הנהלת חשבונות</span>
+          </div>
+        </header>
+
         <h1 className="receipts-title">תנועות בנק</h1>
 
         {loading && <p className="receipts-loading">טוען נתונים...</p>}

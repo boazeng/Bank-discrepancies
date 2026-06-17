@@ -4,6 +4,46 @@
   padding: 24px 16px;
 }
 
+.app-header {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d4e 100%);
+  border-radius: 14px;
+  padding: 18px 28px;
+  margin-bottom: 28px;
+  box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+}
+
+.app-header-logo {
+  height: 70px;
+  width: auto;
+  border-radius: 8px;
+  flex-shrink: 0;
+}
+
+.app-header-text {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.app-header-company {
+  font-size: 28px;
+  font-weight: 800;
+  color: #c9a227;
+  letter-spacing: 0.5px;
+  line-height: 1.1;
+}
+
+.app-header-subtitle {
+  font-size: 15px;
+  font-weight: 400;
+  color: #d4b96a;
+  letter-spacing: 0.3px;
+  opacity: 0.9;
+}
+
 .receipts-container {
   max-width: 1100px;
   margin: 0 auto;
