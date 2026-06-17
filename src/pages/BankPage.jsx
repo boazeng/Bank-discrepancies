@@ -829,13 +829,13 @@ export default function BankPage() {
       <div className="receipts-container">
 
         <header className="app-header">
-          <img src="/tact-logo.svg" alt="tact" className="app-header-tact-logo" />
-          <div className="app-header-divider" />
           <img src="/logo.jpg" alt="Urban Group" className="app-header-logo" />
           <div className="app-header-text">
             <span className="app-header-company">קבוצה אורבנית</span>
             <span className="app-header-subtitle">תוכנת עזר לרישומי הנהלת חשבונות</span>
           </div>
+          <div className="app-header-divider" />
+          <img src="/tact-logo.svg" alt="tact" className="app-header-tact-logo" />
         </header>
 
         <h1 className="receipts-title">תנועות בנק</h1>
