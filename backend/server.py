@@ -52,8 +52,27 @@ if not logger.handlers:
     handler.setFormatter(logging.Formatter("%(message)s"))
     logger.addHandler(handler)
 
-import requests as http_requests
+import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 from requests.auth import HTTPBasicAuth
+
+# Shared HTTP session for all Priority calls: keep-alive (one DNS lookup + TLS
+# handshake per host, then the connection is REUSED across calls) plus automatic
+# retries on transient connection failures. This fixes the slow/erratic loads
+# caused by OrbStack's embedded DNS resolver intermittently timing out under the
+# concurrent lookups gunicorn makes — keep-alive means follow-up calls (e.g.
+# BANKPAGES right after BANKLINESA) don't re-resolve at all.
+# `connect` retries cover DNS/connection errors for ALL methods (safe — nothing
+# was sent yet); read/status retries use urllib3's default idempotent set, so
+# POSTs that create documents are never silently re-sent.
+http_requests = requests.Session()
+_prio_retry = Retry(total=4, connect=4, read=2, backoff_factor=0.4,
+                    status_forcelist=(502, 503, 504))
+_prio_adapter = HTTPAdapter(max_retries=_prio_retry, pool_connections=20, pool_maxsize=20)
+http_requests.mount("https://", _prio_adapter)
+http_requests.mount("http://", _prio_adapter)
+http_requests.exceptions = requests.exceptions  # keep existing `http_requests.exceptions.X`
 from flask import Flask, jsonify, send_file, request, send_from_directory
 from flask_cors import CORS
 
