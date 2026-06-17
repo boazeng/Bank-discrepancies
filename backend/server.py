@@ -373,14 +373,27 @@ def receipts_bank_transactions():
         # (sequential was ~30s for a year of data; parallel is a few seconds).
         if journal_templates_db:
             unique_cn = list({t["CASHNAME"] for t in txns if t.get("CASHNAME")})
+            gl_cache = journal_templates_db.list_bank_gl()   # one read; presence distinguishes
             gl_dict = {}
             uncached = []
             for cn in unique_cn:
-                cached = journal_templates_db.get_bank_gl(cn)
-                if cached:
-                    gl_dict[cn] = cached
-                else:
-                    uncached.append(cn)
+                entry = gl_cache.get(cn)
+                if entry is not None:
+                    gl = entry.get("gl_account", "")
+                    if gl:
+                        gl_dict[cn] = gl
+                        continue
+                    # negatively cached (auto-detect previously found nothing) — honor it
+                    # for a day so we don't re-run the heavy FNCTRANS scan on every load,
+                    # then retry (in case a GL has since been created / set manually).
+                    try:
+                        fresh = (datetime.now() - datetime.fromisoformat(entry.get("updated_at", ""))).days < 1
+                    except Exception:
+                        fresh = False
+                    if fresh:
+                        gl_dict[cn] = ""
+                        continue
+                uncached.append(cn)
             if uncached:
                 from concurrent.futures import ThreadPoolExecutor
                 def _resolve_gl(cn):
@@ -388,6 +401,9 @@ def receipts_bank_transactions():
                 with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as _ex:
                     for cn, gl in _ex.map(_resolve_gl, uncached):
                         gl_dict[cn] = gl
+                        if not gl:   # remember the miss (TTL above) to skip re-scanning it
+                            with _gl_cache_lock:
+                                journal_templates_db.save_bank_gl(cn, "", "")
             for t in txns:
                 t["bank_gl"] = gl_dict.get(t["CASHNAME"], "")
 
