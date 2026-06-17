@@ -124,15 +124,16 @@ export default function BankPage() {
   const [transferAccSugg, setTransferAccSugg]           = useState([])
   const [transferAccSearching, setTransferAccSearching] = useState(false)
 
-  const loadAll = useCallback(async (d, b) => {
+  const loadAll = useCallback(async (d, b, refreshGl) => {
     const daysParam   = d ?? days
     const branchParam = b !== undefined ? b : branchFilter
     setLoading(true)
     setError('')
     try {
+      const glParam = refreshGl ? '&refresh_gl=1' : ''
       const txnUrl = branchParam && branchParam !== 'all'
-        ? `${API}/api/receipts/bank-transactions?days=${daysParam}&branch=${encodeURIComponent(branchParam)}`
-        : `${API}/api/receipts/bank-transactions?days=${daysParam}`
+        ? `${API}/api/receipts/bank-transactions?days=${daysParam}&branch=${encodeURIComponent(branchParam)}${glParam}`
+        : `${API}/api/receipts/bank-transactions?days=${daysParam}${glParam}`
       const [bRes, a, doneRes] = await Promise.all([
         fetch(txnUrl).then(r => r.json()),
         fetch(`${API}/api/receipts/approved`).then(r => r.json()),
@@ -882,9 +883,22 @@ export default function BankPage() {
           return (
             <div style={{ background: '#fff', border: '1px solid #e5e9f0', borderRadius: 12,
               padding: '20px 24px', marginBottom: 24 }}>
-              <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
-                הגדרת חשבונות בנק — מיפוי CASHNAME → GL פריוריטי
-              </h3>
+              <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                gap: 12, margin: '0 0 14px', flexWrap: 'wrap' }}>
+                <h3 style={{ margin: 0, fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
+                  הגדרת חשבונות בנק — מיפוי CASHNAME → GL פריוריטי
+                </h3>
+                <button
+                  onClick={() => loadAll(undefined, undefined, true)}
+                  disabled={loading}
+                  title="מאלץ זיהוי מחדש של חשבונות GL שטרם זוהו (למשל אחרי שיצרת חשבון GL חדש בפריוריטי), בלי להמתין לרענון היומי"
+                  style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6,
+                    padding: '6px 14px', cursor: loading ? 'default' : 'pointer', fontWeight: 700,
+                    fontSize: 13, opacity: loading ? 0.5 : 1, whiteSpace: 'nowrap' }}
+                >
+                  {loading ? 'מזהה…' : '🔄 רענון מאולץ'}
+                </button>
+              </div>
               <p style={{ margin: '0 0 14px', fontSize: 13, color: '#6b7280' }}>
                 לכל CASHNAME יש להזין את מספר חשבון הבנק בתוכנית החשבונות של פריוריטי (לדוגמה: 4021-102).
                 הגדרה זו נשמרת ומשמשת אוטומטית לכל פקודות היומן מבנק זה.

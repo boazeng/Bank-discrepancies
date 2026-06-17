@@ -274,6 +274,9 @@ def receipts_bank_transactions():
     try:
         days = int(request.args.get("days", 180))
         branch = (request.args.get("branch") or "").strip()
+        # Force a fresh GL re-detection for unresolved CASHNAMEs (bypass the 1-day
+        # negative-cache TTL). Resolved/manually-set GLs are kept untouched.
+        refresh_gl = (request.args.get("refresh_gl") or "").lower() in ("1", "true", "yes")
         from datetime import timedelta
         since_date = (_now_il() - timedelta(days=days)).strftime("%Y-%m-%dT00:00:00Z")
 
@@ -390,7 +393,7 @@ def receipts_bank_transactions():
                         fresh = (datetime.now() - datetime.fromisoformat(entry.get("updated_at", ""))).days < 1
                     except Exception:
                         fresh = False
-                    if fresh:
+                    if fresh and not refresh_gl:
                         gl_dict[cn] = ""
                         continue
                 uncached.append(cn)
