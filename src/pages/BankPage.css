@@ -7,41 +7,56 @@
 .app-header {
   display: flex;
   align-items: center;
-  gap: 18px;
-  background: linear-gradient(135deg, #1a1a2e 0%, #2d2d4e 100%);
-  border-radius: 14px;
-  padding: 18px 28px;
-  margin-bottom: 28px;
-  box-shadow: 0 4px 20px rgba(0,0,0,0.18);
+  gap: 16px;
+  background: #FFFEFB;
+  border: 1px solid #E7E2D6;
+  border-radius: 12px;
+  padding: 12px 22px;
+  margin-bottom: 24px;
+  box-shadow: 0 1px 8px rgba(28, 27, 25, 0.06);
+  direction: ltr;
+}
+
+.app-header-tact-logo {
+  height: 38px;
+  width: auto;
+  flex-shrink: 0;
+}
+
+.app-header-divider {
+  width: 1px;
+  height: 36px;
+  background: #E7E2D6;
+  flex-shrink: 0;
 }
 
 .app-header-logo {
-  height: 70px;
+  height: 44px;
   width: auto;
-  border-radius: 8px;
+  border-radius: 6px;
   flex-shrink: 0;
 }
 
 .app-header-text {
   display: flex;
   flex-direction: column;
-  gap: 4px;
+  gap: 1px;
+  direction: rtl;
 }
 
 .app-header-company {
-  font-size: 28px;
-  font-weight: 800;
-  color: #c9a227;
-  letter-spacing: 0.5px;
-  line-height: 1.1;
+  font-size: 17px;
+  font-weight: 700;
+  color: #1C1B19;
+  letter-spacing: 0.2px;
+  line-height: 1.2;
 }
 
 .app-header-subtitle {
-  font-size: 15px;
+  font-size: 11px;
   font-weight: 400;
-  color: #d4b96a;
-  letter-spacing: 0.3px;
-  opacity: 0.9;
+  color: #706A60;
+  letter-spacing: 0.2px;
 }
 
 .receipts-container {
