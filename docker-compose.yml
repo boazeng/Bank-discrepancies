@@ -16,3 +16,6 @@ services:
       - .env
     volumes:
       - ./database:/app/database   # persist JSON state across restarts/rebuilds
+    dns:                           # OrbStack's internal resolver intermittently fails on
+      - 1.1.1.1                    # p.priority-connect.online; use public DNS directly
+      - 8.8.8.8
