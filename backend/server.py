@@ -312,6 +312,50 @@ def receipts_bank_transactions():
         except Exception:
             pass
 
+        # ── Resolve bank GL accounts and filter out credit-card CASHNAMEs ──────
+        # Query Priority CASH entity for every unique CASHNAME in the raw results.
+        # Bank accounts have ACCNAME (GL) in the CASH entity; credit-card accounts
+        # typically do not — they are filtered out here.
+        cash_gl_map: dict = {}  # CASHNAME → GL account
+
+        unique_raw_cn = list({l.get("CASHNAME", "") for l in raw_lines if l.get("CASHNAME")})
+
+        uncached_cn = []
+        for cn in unique_raw_cn:
+            if journal_templates_db:
+                cached = journal_templates_db.get_bank_gl(cn)
+                if cached:
+                    cash_gl_map[cn] = cached
+                    continue
+            uncached_cn.append(cn)
+
+        if uncached_cn:
+            try:
+                chunk_size = 15
+                for i in range(0, len(uncached_cn), chunk_size):
+                    chunk = uncached_cn[i:i + chunk_size]
+                    cash_flt = " or ".join(f"CASHNAME eq '{cn}'" for cn in chunk)
+                    r_cash = http_requests.get(
+                        f"{_prio_url()}/CASH?$filter=({cash_flt})"
+                        "&$select=CASHNAME,CASHDES,ACCNAME",
+                        headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+                    )
+                    if r_cash.status_code == 200:
+                        for cash_rec in r_cash.json().get("value", []):
+                            cn  = (cash_rec.get("CASHNAME") or "").strip()
+                            gl  = (cash_rec.get("ACCNAME")  or "").strip()
+                            des = (cash_rec.get("CASHDES")   or "").strip()
+                            if cn and gl:
+                                cash_gl_map[cn] = gl
+                                if journal_templates_db:
+                                    journal_templates_db.save_bank_gl(cn, gl, des)
+            except Exception as _ce:
+                logger.warning(f"Batch CASH GL lookup failed: {_ce}")
+
+        # Keep only lines whose CASHNAME has a GL in Priority (= real bank accounts).
+        valid_bank_cn = set(cash_gl_map.keys())
+        raw_lines = [l for l in raw_lines if l.get("CASHNAME") in valid_bank_cn]
+
         processed_ids = _load_processed_txns()
         action_queued_ids = action_queue_db.get_fncnums() if action_queue_db else set()
 
@@ -368,47 +412,8 @@ def receipts_bank_transactions():
                 "BANKPAGE":         bp,
                 "KLINE":            kl,
                 "REF":              line.get("REF") or "",
-                "bank_gl":          "",
+                "bank_gl":          cash_gl_map.get(cashname, ""),
             })
-
-        # Resolve GL accounts for all unique CASHNAMEs. Cached ones are instant;
-        # uncached ones each need a Priority lookup, so resolve those CONCURRENTLY
-        # (sequential was ~30s for a year of data; parallel is a few seconds).
-        if journal_templates_db:
-            unique_cn = list({t["CASHNAME"] for t in txns if t.get("CASHNAME")})
-            gl_cache = journal_templates_db.list_bank_gl()   # one read; presence distinguishes
-            gl_dict = {}
-            uncached = []
-            for cn in unique_cn:
-                entry = gl_cache.get(cn)
-                if entry is not None:
-                    gl = entry.get("gl_account", "")
-                    if gl:
-                        gl_dict[cn] = gl
-                        continue
-                    # negatively cached (auto-detect previously found nothing) — honor it
-                    # for a day so we don't re-run the heavy FNCTRANS scan on every load,
-                    # then retry (in case a GL has since been created / set manually).
-                    try:
-                        fresh = (datetime.now() - datetime.fromisoformat(entry.get("updated_at", ""))).days < 1
-                    except Exception:
-                        fresh = False
-                    if fresh and not refresh_gl:
-                        gl_dict[cn] = ""
-                        continue
-                uncached.append(cn)
-            if uncached:
-                from concurrent.futures import ThreadPoolExecutor
-                def _resolve_gl(cn):
-                    return cn, _detect_bank_gl(cn, cn.split("-")[0] if cn else "")[0]
-                with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as _ex:
-                    for cn, gl in _ex.map(_resolve_gl, uncached):
-                        gl_dict[cn] = gl
-                        if not gl:   # remember the miss (TTL above) to skip re-scanning it
-                            with _gl_cache_lock:
-                                journal_templates_db.save_bank_gl(cn, "", "")
-            for t in txns:
-                t["bank_gl"] = gl_dict.get(t["CASHNAME"], "")
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
                         "since": since_date[:10], "branch": branch})

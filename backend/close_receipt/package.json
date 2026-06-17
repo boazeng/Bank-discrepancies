@@ -1,0 +1,14 @@
+{
+  "name": "close-receipt",
+  "version": "1.0.0",
+  "description": "Close Priority receipt via Web SDK (CLOSETIV procedure)",
+  "main": "close_receipt.js",
+  "type": "commonjs",
+  "scripts": {
+    "test": "node close_receipt.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.0.0",
+    "priority-web-sdk": "*"
+  }
+}
