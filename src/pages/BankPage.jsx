@@ -138,7 +138,10 @@ export default function BankPage() {
         fetch(`${API}/api/receipts/approved`).then(r => r.json()),
         fetch(`${API}/api/receipts/action-queue/done-list`).then(r => r.json()),
       ])
-      if (bRes.ok) {
+      if (!bRes.ok) {
+        setError(`שגיאה בטעינת תנועות בנק: ${bRes.error || 'תשובה לא תקינה מהשרת'}`)
+        setBankTxns([])
+      } else {
         const txns = bRes.transactions || []
         setBankTxns(txns)
         setSince(bRes.since || '')
