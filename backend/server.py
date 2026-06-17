@@ -73,6 +73,9 @@ _prio_adapter = HTTPAdapter(max_retries=_prio_retry, pool_connections=20, pool_m
 http_requests.mount("https://", _prio_adapter)
 http_requests.mount("http://", _prio_adapter)
 http_requests.exceptions = requests.exceptions  # keep existing `http_requests.exceptions.X`
+
+import threading
+_gl_cache_lock = threading.Lock()  # serialize bank-GL cache writes during parallel resolution
 from flask import Flask, jsonify, send_file, request, send_from_directory
 from flask_cors import CORS
 
@@ -365,19 +368,26 @@ def receipts_bank_transactions():
                 "bank_gl":          "",
             })
 
-        # Resolve GL accounts for all unique CASHNAMEs in one pass.
-        # For any CASHNAME not yet cached, call _detect_bank_gl (queries Priority CASH entity).
+        # Resolve GL accounts for all unique CASHNAMEs. Cached ones are instant;
+        # uncached ones each need a Priority lookup, so resolve those CONCURRENTLY
+        # (sequential was ~30s for a year of data; parallel is a few seconds).
         if journal_templates_db:
             unique_cn = list({t["CASHNAME"] for t in txns if t.get("CASHNAME")})
             gl_dict = {}
+            uncached = []
             for cn in unique_cn:
                 cached = journal_templates_db.get_bank_gl(cn)
                 if cached:
                     gl_dict[cn] = cached
                 else:
-                    branch = cn.split("-")[0] if cn else ""
-                    gl, _ = _detect_bank_gl(cn, branch)
-                    gl_dict[cn] = gl
+                    uncached.append(cn)
+            if uncached:
+                from concurrent.futures import ThreadPoolExecutor
+                def _resolve_gl(cn):
+                    return cn, _detect_bank_gl(cn, cn.split("-")[0] if cn else "")[0]
+                with ThreadPoolExecutor(max_workers=min(8, len(uncached))) as _ex:
+                    for cn, gl in _ex.map(_resolve_gl, uncached):
+                        gl_dict[cn] = gl
             for t in txns:
                 t["bank_gl"] = gl_dict.get(t["CASHNAME"], "")
 
@@ -852,7 +862,8 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
                 desc = (items[0].get("CASHDES")  or "").strip()
                 if gl:
                     if journal_templates_db:
-                        journal_templates_db.save_bank_gl(cashname, gl, desc)
+                        with _gl_cache_lock:
+                            journal_templates_db.save_bank_gl(cashname, gl, desc)
                     return gl, desc
     except Exception as _e:
         logger.warning(f"_detect_bank_gl CASH lookup failed: {_e}")
@@ -883,14 +894,16 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
         if len(bank_accs) == 1:
             gl, desc = list(bank_accs.items())[0]
             if journal_templates_db:
-                journal_templates_db.save_bank_gl(cashname, gl, desc)
+                with _gl_cache_lock:
+                    journal_templates_db.save_bank_gl(cashname, gl, desc)
             return gl, desc
 
         if bank_name_hint:
             for acc, desc in bank_accs.items():
                 if bank_name_hint in desc:
                     if journal_templates_db:
-                        journal_templates_db.save_bank_gl(cashname, acc, desc)
+                        with _gl_cache_lock:
+                            journal_templates_db.save_bank_gl(cashname, acc, desc)
                     return acc, desc
 
         return "", str(list(bank_accs.keys()))
