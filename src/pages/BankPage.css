@@ -18,7 +18,7 @@
 }
 
 .app-header-tact-logo {
-  height: 38px;
+  height: 54px;
   width: auto;
   flex-shrink: 0;
 }
@@ -31,9 +31,9 @@
 }
 
 .app-header-logo {
-  height: 44px;
+  height: 30px;
   width: auto;
-  border-radius: 6px;
+  border-radius: 4px;
   flex-shrink: 0;
 }
 
@@ -45,7 +45,7 @@
 }
 
 .app-header-company {
-  font-size: 17px;
+  font-size: 13px;
   font-weight: 700;
   color: #1C1B19;
   letter-spacing: 0.2px;
@@ -53,7 +53,7 @@
 }
 
 .app-header-subtitle {
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 400;
   color: #706A60;
   letter-spacing: 0.2px;
