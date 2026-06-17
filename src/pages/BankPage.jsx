@@ -73,6 +73,7 @@ export default function BankPage() {
   const [journalModal, setJournalModal]               = useState(null)
   const [journalBankGlResolved, setJournalBankGlResolved] = useState('')
   const [journalBankGlDesc, setJournalBankGlDesc]         = useState('')
+  const [journalBankGlManual, setJournalBankGlManual]     = useState('')
   const [journalCounterpart, setJournalCounterpart]   = useState('')
   const [journalCounterDesc, setJournalCounterDesc]   = useState('')
   const [journalDetails, setJournalDetails]           = useState('')
@@ -419,6 +420,7 @@ export default function BankPage() {
     setJournalCounterDesc('')
     setJournalBankGlResolved('')
     setJournalBankGlDesc('')
+    setJournalBankGlManual('')
 
     const params = new URLSearchParams({
       cashname:   txn.CASHNAME   || '',
@@ -777,6 +779,7 @@ export default function BankPage() {
 
   async function submitJournal() {
     if (!journalCounterpart.trim()) { setJournalError('יש להזין חשבון נגדי'); return }
+    if (!journalBankGlResolved && !journalBankGlManual.trim()) { setJournalError('יש להזין חשבון בנק GL'); return }
     setJournalSending(true)
     setJournalError('')
     try {
@@ -796,6 +799,7 @@ export default function BankPage() {
           details:             journalDetails,
           ivdate:              (txn.CURDATE || '').slice(0, 10),
           branchname:          txn.BRANCHNAME,
+          bank_gl_account:     journalBankGlManual.trim() || '',
           save_template:       true,
         }),
       })
@@ -1656,7 +1660,9 @@ export default function BankPage() {
                       <td style={{ paddingLeft: 8, color: '#1d4ed8', fontFamily: 'monospace' }}>
                         {journalBankGlResolved
                           ? <><strong>{journalBankGlResolved}</strong>{journalBankGlDesc && <span style={{ color: '#6b7280', fontFamily: 'sans-serif', marginRight: 6, fontWeight: 400 }}>{journalBankGlDesc}</span>}</>
-                          : <span style={{ color: '#9ca3af' }}>מזהה...</span>
+                          : journalBankGlManual
+                            ? <strong style={{ color: '#b45309' }}>{journalBankGlManual}</strong>
+                            : <span style={{ color: '#ef4444' }}>לא נמצא אוטומטית</span>
                         }
                       </td>
                     )
@@ -1684,6 +1690,19 @@ export default function BankPage() {
                 </tbody>
               </table>
             </div>
+
+            {!journalBankGlResolved && (
+              <div className="receipts-modal-field">
+                <label>חשבון בנק GL *<span style={{ color: '#ef4444', fontSize: 12, marginRight: 6 }}>(לא זוהה אוטומטית — הזן ידנית)</span></label>
+                <input
+                  type="text"
+                  placeholder="לדוגמה: 4021-102"
+                  value={journalBankGlManual}
+                  onChange={e => setJournalBankGlManual(e.target.value)}
+                  style={{ borderColor: journalBankGlManual ? '#16a34a' : '#f59e0b' }}
+                />
+              </div>
+            )}
 
             <div className="receipts-modal-field">
               <label>חשבון נגדי (ACCNAME) *</label>

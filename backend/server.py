@@ -884,17 +884,24 @@ def bank_line_create_journal():
         ivdate           = str(data.get("ivdate",             ""))[:10]
         branchname       = str(data.get("branchname",         "")).strip()
         save_tpl         = data.get("save_template", True)
+        manual_bank_gl   = str(data.get("bank_gl_account",   "")).strip()
         fncref_value     = bank_ref or txn_id
 
         if not txn_id or not counterpart or amount <= 0:
             return jsonify({"ok": False, "error": "חסרים שדות חובה (txn_id, counterpart_account, amount)"}), 400
 
-        bank_gl_account, bank_gl_desc = _detect_bank_gl(cashname, branchname, bank_name_hint)
+        if manual_bank_gl:
+            bank_gl_account = manual_bank_gl
+            bank_gl_desc    = ""
+            if journal_templates_db:
+                journal_templates_db.save_bank_gl(cashname, bank_gl_account, bank_gl_desc)
+        else:
+            bank_gl_account, bank_gl_desc = _detect_bank_gl(cashname, branchname, bank_name_hint)
         if not bank_gl_account:
             return jsonify({
                 "ok": False,
                 "error": f"לא נמצא חשבון GL לבנק (CASHNAME={cashname}, סניף={branchname}). "
-                          f"בדוק שיש תנועות יומן קיימות בפריוריטי לסניף זה.",
+                          f"הזן אותו ידנית בשדה 'חשבון בנק GL'.",
             }), 422
 
         def _with_branch(acc, branch):
