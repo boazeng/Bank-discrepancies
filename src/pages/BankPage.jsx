@@ -108,6 +108,11 @@ export default function BankPage() {
   const [irError, setIrError]         = useState('')
   const [irPrevNote, setIrPrevNote]   = useState('')
 
+  // Bank GL settings
+  const [showBankGlSettings, setShowBankGlSettings] = useState(false)
+  const [bankGlInputs, setBankGlInputs]             = useState({})
+  const [bankGlSaving, setBankGlSaving]             = useState({})
+
   // Bank transfer modal state
   const [transferModal, setTransferModal]               = useState(null)
   const [transferAccname, setTransferAccname]           = useState('')
@@ -418,24 +423,9 @@ export default function BankPage() {
     setJournalSaveTpl(true)
     setJournalCounterpart('')
     setJournalCounterDesc('')
-    setJournalBankGlResolved('')
+    setJournalBankGlResolved(txn.bank_gl || '')
     setJournalBankGlDesc('')
     setJournalBankGlManual('')
-
-    const params = new URLSearchParams({
-      cashname:   txn.CASHNAME   || '',
-      branchname: txn.BRANCHNAME || '',
-      bank_name:  txn.bank_name  || '',
-    })
-    fetch(`${API}/api/receipts/bank-gl?${params}`)
-      .then(r => r.json())
-      .then(d => {
-        if (d.ok && d.gl_account) {
-          setJournalBankGlResolved(d.gl_account)
-          setJournalBankGlDesc(d.gl_desc || '')
-        }
-      })
-      .catch(() => {})
 
     if (txn.DETAILS) {
       fetch(`${API}/api/receipts/journal-template?details=${encodeURIComponent(txn.DETAILS)}`)
@@ -777,9 +767,28 @@ export default function BankPage() {
     }
   }
 
+  async function saveBankGl(cashname, bankDesc) {
+    const gl = (bankGlInputs[cashname] || '').trim()
+    if (!gl) return
+    setBankGlSaving(p => ({ ...p, [cashname]: true }))
+    try {
+      const res = await fetch(`${API}/api/receipts/bank-gl-map`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cashname, gl_account: gl, bank_desc: bankDesc }),
+      }).then(r => r.json())
+      if (!res.ok) throw new Error(res.error || 'שגיאה')
+      await loadAll()
+    } catch (e) {
+      alert('שגיאה בשמירה: ' + e.message)
+    } finally {
+      setBankGlSaving(p => ({ ...p, [cashname]: false }))
+    }
+  }
+
   async function submitJournal() {
     if (!journalCounterpart.trim()) { setJournalError('יש להזין חשבון נגדי'); return }
-    if (!journalBankGlResolved && !journalBankGlManual.trim()) { setJournalError('יש להזין חשבון בנק GL'); return }
+    if (!journalBankGlResolved) { setJournalError('יש להגדיר חשבון GL לבנק זה בהגדרות הבנק'); return }
     setJournalSending(true)
     setJournalError('')
     try {
@@ -799,7 +808,7 @@ export default function BankPage() {
           details:             journalDetails,
           ivdate:              (txn.CURDATE || '').slice(0, 10),
           branchname:          txn.BRANCHNAME,
-          bank_gl_account:     journalBankGlManual.trim() || '',
+          bank_gl_account:     journalBankGlResolved || '',
           save_template:       true,
         }),
       })
@@ -838,6 +847,89 @@ export default function BankPage() {
             <button style={{ marginRight: 12, cursor: 'pointer', background: 'none', border: 'none', color: '#1d4ed8' }} onClick={() => setLastIvnum(null)}>×</button>
           </div>
         )}
+
+        {/* ── Bank GL settings banner ── */}
+        {!loading && (() => {
+          const missing = [...new Set(bankTxns.filter(t => !t.bank_gl && t.CASHNAME).map(t => t.CASHNAME))]
+          if (!missing.length) return null
+          return (
+            <div style={{ background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 10,
+              padding: '12px 18px', marginBottom: 20, display: 'flex', alignItems: 'center',
+              gap: 12, flexWrap: 'wrap' }}>
+              <span style={{ fontSize: 18 }}>⚠️</span>
+              <span style={{ flex: 1, fontSize: 14, color: '#92400e' }}>
+                <strong>{missing.length} חשבון/ות בנק</strong> לא מוגדרים — נדרש מיפוי CASHNAME ← חשבון GL בפריוריטי
+              </span>
+              <button
+                onClick={() => setShowBankGlSettings(p => !p)}
+                style={{ background: '#f59e0b', color: '#fff', border: 'none', borderRadius: 6,
+                  padding: '6px 14px', cursor: 'pointer', fontWeight: 700, fontSize: 13 }}
+              >
+                {showBankGlSettings ? 'סגור הגדרות' : 'הגדרת חשבונות בנק'}
+              </button>
+            </div>
+          )
+        })()}
+
+        {/* ── Bank GL settings panel ── */}
+        {showBankGlSettings && !loading && (() => {
+          const rows = [...new Map(bankTxns.filter(t => t.CASHNAME).map(t => [t.CASHNAME, t])).values()]
+          return (
+            <div style={{ background: '#fff', border: '1px solid #e5e9f0', borderRadius: 12,
+              padding: '20px 24px', marginBottom: 24 }}>
+              <h3 style={{ margin: '0 0 14px', fontSize: 16, fontWeight: 700, color: '#1a1a2e' }}>
+                הגדרת חשבונות בנק — מיפוי CASHNAME → GL פריוריטי
+              </h3>
+              <p style={{ margin: '0 0 14px', fontSize: 13, color: '#6b7280' }}>
+                לכל CASHNAME יש להזין את מספר חשבון הבנק בתוכנית החשבונות של פריוריטי (לדוגמה: 4021-102).
+                הגדרה זו נשמרת ומשמשת אוטומטית לכל פקודות היומן מבנק זה.
+              </p>
+              <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: 13 }}>
+                <thead>
+                  <tr style={{ background: '#f8f9fb', color: '#374151' }}>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>CASHNAME</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>שם בנק</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>חשבון GL נוכחי</th>
+                    <th style={{ padding: '8px 12px', textAlign: 'right', fontWeight: 600 }}>חשבון GL חדש</th>
+                    <th style={{ padding: '8px 12px' }}></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map(t => (
+                    <tr key={t.CASHNAME} style={{ borderTop: '1px solid #e5e9f0' }}>
+                      <td style={{ padding: '8px 12px', fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{t.CASHNAME}</td>
+                      <td style={{ padding: '8px 12px', color: '#374151' }}>{t.bank_name || t.bank_desc || '—'}</td>
+                      <td style={{ padding: '8px 12px', fontFamily: 'monospace', color: t.bank_gl ? '#16a34a' : '#9ca3af' }}>
+                        {t.bank_gl || 'לא מוגדר'}
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <input
+                          type="text"
+                          placeholder="לדוגמה: 4021-102"
+                          value={bankGlInputs[t.CASHNAME] || ''}
+                          onChange={e => setBankGlInputs(p => ({ ...p, [t.CASHNAME]: e.target.value }))}
+                          style={{ padding: '5px 8px', border: '1px solid #d1d5db', borderRadius: 6,
+                            fontFamily: 'monospace', fontSize: 13, width: 130 }}
+                        />
+                      </td>
+                      <td style={{ padding: '8px 12px' }}>
+                        <button
+                          onClick={() => saveBankGl(t.CASHNAME, t.bank_name || t.bank_desc || '')}
+                          disabled={bankGlSaving[t.CASHNAME] || !bankGlInputs[t.CASHNAME]}
+                          style={{ background: '#1d4ed8', color: '#fff', border: 'none', borderRadius: 6,
+                            padding: '5px 12px', cursor: 'pointer', fontSize: 13, fontWeight: 600,
+                            opacity: (!bankGlInputs[t.CASHNAME]) ? 0.4 : 1 }}
+                        >
+                          {bankGlSaving[t.CASHNAME] ? 'שומר...' : 'שמור'}
+                        </button>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )
+        })()}
 
         {!loading && (
           <>
@@ -1660,9 +1752,7 @@ export default function BankPage() {
                       <td style={{ paddingLeft: 8, color: '#1d4ed8', fontFamily: 'monospace' }}>
                         {journalBankGlResolved
                           ? <><strong>{journalBankGlResolved}</strong>{journalBankGlDesc && <span style={{ color: '#6b7280', fontFamily: 'sans-serif', marginRight: 6, fontWeight: 400 }}>{journalBankGlDesc}</span>}</>
-                          : journalBankGlManual
-                            ? <strong style={{ color: '#b45309' }}>{journalBankGlManual}</strong>
-                            : <span style={{ color: '#ef4444' }}>לא נמצא אוטומטית</span>
+                          : <span style={{ color: '#ef4444' }}>לא מוגדר</span>
                         }
                       </td>
                     )
@@ -1692,15 +1782,16 @@ export default function BankPage() {
             </div>
 
             {!journalBankGlResolved && (
-              <div className="receipts-modal-field">
-                <label>חשבון בנק GL *<span style={{ color: '#ef4444', fontSize: 12, marginRight: 6 }}>(לא זוהה אוטומטית — הזן ידנית)</span></label>
-                <input
-                  type="text"
-                  placeholder="לדוגמה: 4021-102"
-                  value={journalBankGlManual}
-                  onChange={e => setJournalBankGlManual(e.target.value)}
-                  style={{ borderColor: journalBankGlManual ? '#16a34a' : '#f59e0b' }}
-                />
+              <div style={{ background: '#fef9c3', border: '1px solid #f59e0b', borderRadius: 8,
+                padding: '10px 14px', marginBottom: 12, fontSize: 13, color: '#92400e' }}>
+                ⚠️ חשבון GL לבנק <strong>{journalModal?.CASHNAME}</strong> לא מוגדר.
+                <button
+                  onClick={() => { setJournalModal(null); setShowBankGlSettings(true) }}
+                  style={{ background: 'none', border: 'none', color: '#1d4ed8', cursor: 'pointer',
+                    textDecoration: 'underline', fontWeight: 700, fontSize: 13, marginRight: 8 }}
+                >
+                  עבור להגדרות בנק
+                </button>
               </div>
             )}
 

@@ -343,7 +343,15 @@ def receipts_bank_transactions():
                 "BANKPAGE":         bp,
                 "KLINE":            kl,
                 "REF":              line.get("REF") or "",
+                "bank_gl":          "",
             })
+
+        # Resolve GL accounts for all unique CASHNAMEs in one pass
+        if journal_templates_db:
+            unique_cn = list({t["CASHNAME"] for t in txns if t.get("CASHNAME")})
+            gl_dict = {cn: journal_templates_db.get_bank_gl(cn) for cn in unique_cn}
+            for t in txns:
+                t["bank_gl"] = gl_dict.get(t["CASHNAME"], "")
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
                         "since": since_date[:10], "branch": branch})
@@ -1290,6 +1298,33 @@ def journal_template_suggest():
             return jsonify({"ok": True, "counterpart_account": "", "counterpart_desc": ""})
         acc, desc = journal_templates_db.get_suggestion(details)
         return jsonify({"ok": True, "counterpart_account": acc or "", "counterpart_desc": desc or ""})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/bank-gl-map", methods=["GET"])
+def list_bank_gl_map():
+    """Return all saved CASHNAME → GL account mappings."""
+    try:
+        data = journal_templates_db.list_bank_gl() if journal_templates_db else {}
+        return jsonify({"ok": True, "map": data})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/bank-gl-map", methods=["POST"])
+def save_bank_gl_map():
+    """Save a CASHNAME → GL account mapping."""
+    try:
+        body       = request.get_json(force=True) or {}
+        cashname   = body.get("cashname",   "").strip()
+        gl_account = body.get("gl_account", "").strip()
+        bank_desc  = body.get("bank_desc",  "").strip()
+        if not cashname or not gl_account:
+            return jsonify({"ok": False, "error": "חסרים שדות cashname / gl_account"}), 400
+        if journal_templates_db:
+            journal_templates_db.save_bank_gl(cashname, gl_account, bank_desc)
+        return jsonify({"ok": True})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
