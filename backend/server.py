@@ -346,10 +346,19 @@ def receipts_bank_transactions():
                 "bank_gl":          "",
             })
 
-        # Resolve GL accounts for all unique CASHNAMEs in one pass
+        # Resolve GL accounts for all unique CASHNAMEs in one pass.
+        # For any CASHNAME not yet cached, call _detect_bank_gl (queries Priority CASH entity).
         if journal_templates_db:
             unique_cn = list({t["CASHNAME"] for t in txns if t.get("CASHNAME")})
-            gl_dict = {cn: journal_templates_db.get_bank_gl(cn) for cn in unique_cn}
+            gl_dict = {}
+            for cn in unique_cn:
+                cached = journal_templates_db.get_bank_gl(cn)
+                if cached:
+                    gl_dict[cn] = cached
+                else:
+                    branch = cn.split("-")[0] if cn else ""
+                    gl, _ = _detect_bank_gl(cn, branch)
+                    gl_dict[cn] = gl
             for t in txns:
                 t["bank_gl"] = gl_dict.get(t["CASHNAME"], "")
 
@@ -800,15 +809,38 @@ def bank_line_dismiss():
 
 
 def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
-    """Auto-detect the bank GL account (40xx-branch) for a given CASHNAME."""
-    import re as _re
-
+    """Return the Priority GL account for a CASHNAME.
+    Priority 1: local cache (journal_templates_db).
+    Priority 2: CASH OData entity (ACCNAME field on the cash account record).
+    Priority 3: scan recent FNCTRANS for 40xx- accounts (legacy fallback).
+    """
     if journal_templates_db:
         cached = journal_templates_db.get_bank_gl(cashname)
         if cached:
             return cached, ""
 
+    # ── Primary: query Priority's CASH entity directly ──────────────────────
     try:
+        r = http_requests.get(
+            f"{_prio_url()}/CASH?$filter=CASHNAME eq '{cashname}'"
+            "&$select=CASHNAME,CASHDES,ACCNAME",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+        )
+        if r.status_code == 200:
+            items = r.json().get("value", [])
+            if items:
+                gl   = (items[0].get("ACCNAME") or "").strip()
+                desc = (items[0].get("CASHDES")  or "").strip()
+                if gl:
+                    if journal_templates_db:
+                        journal_templates_db.save_bank_gl(cashname, gl, desc)
+                    return gl, desc
+    except Exception as _e:
+        logger.warning(f"_detect_bank_gl CASH lookup failed: {_e}")
+
+    # ── Fallback: scan recent FNCTRANS for 40xx- accounts ───────────────────
+    try:
+        import re as _re
         since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
         flt = f"BRANCHNAME eq '{branchname}' and FNCDATE ge {since}"
         r = http_requests.get(
@@ -816,7 +848,7 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
             f"?$filter={flt}"
             "&$expand=FNCITEMS_SUBFORM($select=ACCNAME,ACCDES)"
             "&$select=FNCNUM&$top=100",
-            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15,
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
         )
         r.raise_for_status()
         bank_accs = {}
