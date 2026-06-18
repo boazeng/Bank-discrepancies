@@ -411,7 +411,7 @@ def receipts_bank_transactions():
                 "KLINE":            kl,
                 "REF":              line.get("REF") or "",
                 "bank_gl":          cash_gl_map.get(cashname, ""),
-                "account_type":     "bank" if cashname in valid_bank_cn else "credit",
+                "account_type":     "bank" if len(cashname.split("-")) == 2 else "credit",
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
