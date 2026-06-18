@@ -7,11 +7,12 @@
 .app-header {
   display: flex;
   align-items: center;
-  justify-content: space-between;
+  gap: 16px;
+  justify-content: flex-end;
   background: transparent;
   padding: 8px 0 16px;
   margin-bottom: 8px;
-  direction: rtl;
+  direction: ltr;
 }
 
 .app-header-tact-logo {
@@ -21,13 +22,15 @@
 }
 
 .app-header-page-title {
-  background: #1C1B19;
-  color: #fff;
-  font-size: 15px;
-  font-weight: 600;
-  padding: 8px 20px;
+  background: #f0efea;
+  color: #1C1B19;
+  font-size: 14px;
+  font-weight: 500;
+  padding: 7px 18px;
   border-radius: 22px;
+  border: 1px solid #D8D4C8;
   letter-spacing: 0.2px;
+  direction: rtl;
 }
 
 .receipts-container {
