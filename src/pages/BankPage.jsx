@@ -943,43 +943,97 @@ export default function BankPage() {
           )
         })()}
 
-        {!loading && (
+        {!loading && (() => {
+          const bankOnly   = bankTxns.filter(t => t.account_type !== 'credit')
+          const creditOnly = bankTxns.filter(t => t.account_type === 'credit')
+
+          const sharedControls = (
+            <>
+              <div className="receipts-days-selector">
+                <label>סניף:</label>
+                <select
+                  value={branchFilter}
+                  onChange={e => { const v = e.target.value; setBranchFilter(v); loadAll(undefined, v) }}
+                >
+                  <option value="all">כל הסניפים</option>
+                  {allBranches.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="receipts-days-selector">
+                <label>הצג מ-</label>
+                <select
+                  value={days}
+                  onChange={e => { const d = Number(e.target.value); setDays(d); loadAll(d, branchFilter) }}
+                >
+                  <option value={30}>30 יום</option>
+                  <option value={60}>60 יום</option>
+                  <option value={90}>90 יום</option>
+                  <option value={180}>חצי שנה</option>
+                  <option value={365}>שנה</option>
+                  <option value={730}>שנתיים</option>
+                  <option value={3650}>כל התקופה</option>
+                </select>
+                {since && <span className="receipts-since">({fmt(since + 'T00:00:00Z')} ואילך)</span>}
+              </div>
+              <button className="receipts-refresh" onClick={() => loadAll(undefined, branchFilter)}>רענן</button>
+            </>
+          )
+
+          const txnRows = (txns) => txns.map(txn => {
+            const chosen = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
+            const s = ACTION_STYLES[chosen] || ACTION_STYLES.journal
+            const busy = actioning === txn.FNCNUM
+            return (
+              <tr key={txn.FNCNUM}>
+                <td>{fmt(txn.CURDATE)}</td>
+                <td>{txn.DETAILS}</td>
+                <td><AmountCell sum1={txn.SUM1} direction={txn.direction} /></td>
+                <td className="receipts-small" title={txn.bank_code}>{txn.bank_desc || txn.bank_code}</td>
+                <td>{txn.BRANCHNAME}</td>
+                <td>
+                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                    <select
+                      className="receipts-action-select"
+                      style={{ minWidth: 170, color: s.color, borderColor: s.color + '88' }}
+                      value={chosen}
+                      onChange={e => setRowActions(prev => ({ ...prev, [txn.FNCNUM]: e.target.value }))}
+                    >
+                      <option value="receipt">הפקת קבלה</option>
+                      <option value="invoice_receipt">חשבונית מס קבלה</option>
+                      <option value="journal">רישום פקודת יומן</option>
+                      <option value="transfer">הפקת העברה בנקאית</option>
+                    </select>
+                    <button
+                      className="receipts-action-btn"
+                      style={{ color: s.color, background: s.bg, borderColor: s.color + '88', whiteSpace: 'nowrap' }}
+                      disabled={busy}
+                      onClick={() => {
+                        if (chosen === 'receipt') openReceiptModal(txn, 'receipt')
+                        else if (chosen === 'invoice_receipt') openInvoiceReceiptModal(txn)
+                        else if (chosen === 'journal') openJournalModal(txn)
+                        else if (chosen === 'transfer') openTransferModal(txn)
+                        else { setActioning(txn.FNCNUM); recordAction(txn, chosen) }
+                      }}
+                    >
+                      {busy ? '...' : '← בצע'}
+                    </button>
+                  </div>
+                </td>
+              </tr>
+            )
+          })
+
+          return (
           <>
-            {/* ── Section B: Unmatched bank lines ── */}
+            {/* ── Section: Unmatched bank lines ── */}
             <section className="receipts-section">
               <div className="receipts-section-header">
                 <h2>תנועות בנק ללא התאמה</h2>
-                <span className="receipts-badge">{bankTxns.length + draftReceipts.length}</span>
-                <div className="receipts-days-selector">
-                  <label>סניף:</label>
-                  <select
-                    value={branchFilter}
-                    onChange={e => { const v = e.target.value; setBranchFilter(v); loadAll(undefined, v) }}
-                  >
-                    <option value="all">כל הסניפים</option>
-                    {allBranches.map(b => <option key={b} value={b}>{b}</option>)}
-                  </select>
-                </div>
-                <div className="receipts-days-selector">
-                  <label>הצג מ-</label>
-                  <select
-                    value={days}
-                    onChange={e => { const d = Number(e.target.value); setDays(d); loadAll(d, branchFilter) }}
-                  >
-                    <option value={30}>30 יום</option>
-                    <option value={60}>60 יום</option>
-                    <option value={90}>90 יום</option>
-                    <option value={180}>חצי שנה</option>
-                    <option value={365}>שנה</option>
-                    <option value={730}>שנתיים</option>
-                    <option value={3650}>כל התקופה</option>
-                  </select>
-                  {since && <span className="receipts-since">({fmt(since + 'T00:00:00Z')} ואילך)</span>}
-                </div>
-                <button className="receipts-refresh" onClick={() => loadAll(undefined, branchFilter)}>רענן</button>
+                <span className="receipts-badge">{bankOnly.length + draftReceipts.length}</span>
+                {sharedControls}
               </div>
 
-              {bankTxns.length === 0 && draftReceipts.length === 0 ? (
+              {bankOnly.length === 0 && draftReceipts.length === 0 ? (
                 <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
               ) : (
                 <div className="receipts-table-wrap">
@@ -1043,54 +1097,39 @@ export default function BankPage() {
                           </td>
                         </tr>
                       ))}
-                      {bankTxns.map(txn => {
-                        const chosen = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
-                        const s = ACTION_STYLES[chosen] || ACTION_STYLES.journal
-                        const busy = actioning === txn.FNCNUM
-                        return (
-                          <tr key={txn.FNCNUM}>
-                            <td>{fmt(txn.CURDATE)}</td>
-                            <td>{txn.DETAILS}</td>
-                            <td><AmountCell sum1={txn.SUM1} direction={txn.direction} /></td>
-                            <td className="receipts-small" title={txn.bank_code}>{txn.bank_desc || txn.bank_code}</td>
-                            <td>{txn.BRANCHNAME}</td>
-                            <td>
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                                <select
-                                  className="receipts-action-select"
-                                  style={{ minWidth: 170, color: s.color, borderColor: s.color + '88' }}
-                                  value={chosen}
-                                  onChange={e => setRowActions(prev => ({ ...prev, [txn.FNCNUM]: e.target.value }))}
-                                >
-                                  <option value="receipt">הפקת קבלה</option>
-                                  <option value="invoice_receipt">חשבונית מס קבלה</option>
-                                  <option value="journal">רישום פקודת יומן</option>
-                                  <option value="transfer">הפקת העברה בנקאית</option>
-                                </select>
-                                <button
-                                  className="receipts-action-btn"
-                                  style={{ color: s.color, background: s.bg, borderColor: s.color + '88', whiteSpace: 'nowrap' }}
-                                  disabled={busy}
-                                  onClick={() => {
-                                    if (chosen === 'receipt') openReceiptModal(txn, 'receipt')
-                                    else if (chosen === 'invoice_receipt') openInvoiceReceiptModal(txn)
-                                    else if (chosen === 'journal') openJournalModal(txn)
-                                    else if (chosen === 'transfer') openTransferModal(txn)
-                                    else { setActioning(txn.FNCNUM); recordAction(txn, chosen) }
-                                  }}
-                                >
-                                  {busy ? '...' : '← בצע'}
-                                </button>
-                              </div>
-                            </td>
-                          </tr>
-                        )
-                      })}
+                      {txnRows(bankOnly)}
                     </tbody>
                   </table>
                 </div>
               )}
             </section>
+
+            {/* ── Section: Unmatched credit lines ── */}
+            {creditOnly.length > 0 && (
+            <section className="receipts-section">
+              <div className="receipts-section-header">
+                <h2>תנועות אשראי ללא התאמה</h2>
+                <span className="receipts-badge" style={{ background: '#7c3aed' }}>{creditOnly.length}</span>
+              </div>
+              <div className="receipts-table-wrap">
+                <table className="receipts-table">
+                  <thead>
+                    <tr>
+                      <th>תאריך</th>
+                      <th>תיאור תנועה</th>
+                      <th>סכום</th>
+                      <th>כרטיס אשראי</th>
+                      <th>סניף</th>
+                      <th>פעולה</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {txnRows(creditOnly)}
+                  </tbody>
+                </table>
+              </div>
+            </section>
+            )}
 
             {/* ── Section A: פעולות שבוצעו בפריוריטי ── */}
             {(() => {
@@ -1301,7 +1340,8 @@ export default function BankPage() {
               )
             })()}
           </>
-        )}
+          )
+        })()}
       </div>
 
       {/* ── Receipt Modal ── */}

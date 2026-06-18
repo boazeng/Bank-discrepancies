@@ -352,9 +352,7 @@ def receipts_bank_transactions():
             except Exception as _ce:
                 logger.warning(f"Batch CASH GL lookup failed: {_ce}")
 
-        # Keep only lines whose CASHNAME has a GL in Priority (= real bank accounts).
         valid_bank_cn = set(cash_gl_map.keys())
-        raw_lines = [l for l in raw_lines if l.get("CASHNAME") in valid_bank_cn]
 
         processed_ids = _load_processed_txns()
         action_queued_ids = action_queue_db.get_fncnums() if action_queue_db else set()
@@ -413,6 +411,7 @@ def receipts_bank_transactions():
                 "KLINE":            kl,
                 "REF":              line.get("REF") or "",
                 "bank_gl":          cash_gl_map.get(cashname, ""),
+                "account_type":     "bank" if cashname in valid_bank_cn else "credit",
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
