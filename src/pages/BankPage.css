@@ -95,6 +95,54 @@
   background: #d97706;
 }
 
+.receipts-tabs {
+  display: flex;
+  gap: 6px;
+  flex-shrink: 0;
+}
+
+.receipts-tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 18px;
+  border-radius: 22px;
+  border: 1px solid #D8D4C8;
+  background: #f0efea;
+  color: #4b5563;
+  font-size: 14px;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+.receipts-tab:hover { background: #e5e3dc; }
+
+.receipts-tab-active {
+  background: #1C1B19;
+  color: #fff;
+  border-color: #1C1B19;
+}
+.receipts-tab-active:hover { background: #333; }
+
+.receipts-tab-active-credit {
+  background: #7c3aed;
+  border-color: #7c3aed;
+}
+.receipts-tab-active-credit:hover { background: #6d28d9; }
+
+.receipts-tab-badge {
+  background: rgba(255,255,255,0.25);
+  color: inherit;
+  border-radius: 10px;
+  padding: 1px 7px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.receipts-tab:not(.receipts-tab-active) .receipts-tab-badge {
+  background: #d1cfc8;
+  color: #374151;
+}
+
 .receipts-hint {
   font-size: 13px;
   color: #6b7280;

@@ -48,6 +48,8 @@ export default function BankPage() {
   const [actioning, setActioning] = useState(null)
   const [rowActions, setRowActions] = useState({})
 
+  const [activeTab, setActiveTab]     = useState('bank')
+
   const [days, setDays]               = useState(365)
   const [since, setSince]             = useState('')
   const [branchFilter, setBranchFilter] = useState('all')
@@ -1025,111 +1027,124 @@ export default function BankPage() {
 
           return (
           <>
-            {/* ── Section: Unmatched bank lines ── */}
+            {/* ── Tabbed section: bank / credit ── */}
             <section className="receipts-section">
               <div className="receipts-section-header">
-                <h2>תנועות בנק ללא התאמה</h2>
-                <span className="receipts-badge">{bankOnly.length + draftReceipts.length}</span>
+                <div className="receipts-tabs">
+                  <button
+                    className={`receipts-tab${activeTab === 'bank' ? ' receipts-tab-active' : ''}`}
+                    onClick={() => setActiveTab('bank')}
+                  >
+                    תנועות בנק
+                    <span className="receipts-tab-badge">{bankOnly.length + draftReceipts.length}</span>
+                  </button>
+                  <button
+                    className={`receipts-tab${activeTab === 'credit' ? ' receipts-tab-active receipts-tab-active-credit' : ''}`}
+                    onClick={() => setActiveTab('credit')}
+                  >
+                    תנועות אשראי
+                    <span className="receipts-tab-badge">{creditOnly.length}</span>
+                  </button>
+                </div>
                 {sharedControls}
               </div>
 
-              {bankOnly.length === 0 && draftReceipts.length === 0 ? (
-                <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
-              ) : (
-                <div className="receipts-table-wrap">
-                  <table className="receipts-table">
-                    <thead>
-                      <tr>
-                        <th>תאריך</th>
-                        <th>תיאור תנועה</th>
-                        <th>סכום</th>
-                        <th>חשבון בנק</th>
-                        <th>סניף</th>
-                        <th>פעולה</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {draftReceipts.map(rec => (
-                        <tr key={rec.id} style={{ background: '#fffbeb' }}>
-                          <td>{fmt(rec.approved_at || rec.created_at)}</td>
-                          <td>
-                            <div style={{ fontWeight: 600 }}>{rec.accdes || rec.accname}</div>
-                            <div style={{ fontSize: 11, color: '#6b7280' }}>{rec.details}</div>
-                          </td>
-                          <td><AmountCell sum1={rec.totprice} direction="+" /></td>
-                          <td className="receipts-small">{rec.cashname}</td>
-                          <td>{rec.branchname}</td>
-                          <td>
-                            <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                              <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 8,
-                                background: rec.doc_type === 'invoice_receipt' ? '#f5f3ff' : '#fef3c7',
-                                color:      rec.doc_type === 'invoice_receipt' ? '#7c3aed'  : '#92400e',
-                                fontWeight: 600 }}>
-                                {rec.doc_type === 'invoice_receipt' ? 'חשבונית מס קבלה' : 'טיוטה'}: {rec.priority_ivnum}
-                              </span>
-                              {rec.doc_type !== 'invoice_receipt' && (
-                              <button
-                                className="receipts-btn receipts-btn-approve"
-                                style={{ fontSize: 12, padding: '3px 10px' }}
-                                onClick={() => closeReceipt(rec)}
-                                disabled={closing === rec.id}
-                              >
-                                {closing === rec.id ? 'סוגר...' : 'סגור קבלה'}
-                              </button>
-                              )}
-                              {rec.doc_type === 'invoice_receipt' && (
-                              <button
-                                className="receipts-btn receipts-btn-approve"
-                                style={{ fontSize: 12, padding: '3px 10px' }}
-                                onClick={() => closeEinvoice(rec)}
-                                disabled={closingEinvoice === rec.id}
-                              >
-                                {closingEinvoice === rec.id ? 'סוגר...' : 'סגור חשבונית'}
-                              </button>
-                              )}
-                              <button
-                                className="receipts-btn receipts-btn-reject"
-                                style={{ fontSize: 12, padding: '3px 8px' }}
-                                onClick={() => deleteReceipt(rec)}
-                                disabled={deleting === rec.id}
-                              >בטל</button>
-                            </div>
-                          </td>
+              {activeTab === 'bank' && (
+                bankOnly.length === 0 && draftReceipts.length === 0 ? (
+                  <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
+                ) : (
+                  <div className="receipts-table-wrap">
+                    <table className="receipts-table">
+                      <thead>
+                        <tr>
+                          <th>תאריך</th>
+                          <th>תיאור תנועה</th>
+                          <th>סכום</th>
+                          <th>חשבון בנק</th>
+                          <th>סניף</th>
+                          <th>פעולה</th>
                         </tr>
-                      ))}
-                      {txnRows(bankOnly)}
-                    </tbody>
-                  </table>
-                </div>
+                      </thead>
+                      <tbody>
+                        {draftReceipts.map(rec => (
+                          <tr key={rec.id} style={{ background: '#fffbeb' }}>
+                            <td>{fmt(rec.approved_at || rec.created_at)}</td>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{rec.accdes || rec.accname}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>{rec.details}</div>
+                            </td>
+                            <td><AmountCell sum1={rec.totprice} direction="+" /></td>
+                            <td className="receipts-small">{rec.cashname}</td>
+                            <td>{rec.branchname}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 8,
+                                  background: rec.doc_type === 'invoice_receipt' ? '#f5f3ff' : '#fef3c7',
+                                  color:      rec.doc_type === 'invoice_receipt' ? '#7c3aed'  : '#92400e',
+                                  fontWeight: 600 }}>
+                                  {rec.doc_type === 'invoice_receipt' ? 'חשבונית מס קבלה' : 'טיוטה'}: {rec.priority_ivnum}
+                                </span>
+                                {rec.doc_type !== 'invoice_receipt' && (
+                                <button
+                                  className="receipts-btn receipts-btn-approve"
+                                  style={{ fontSize: 12, padding: '3px 10px' }}
+                                  onClick={() => closeReceipt(rec)}
+                                  disabled={closing === rec.id}
+                                >
+                                  {closing === rec.id ? 'סוגר...' : 'סגור קבלה'}
+                                </button>
+                                )}
+                                {rec.doc_type === 'invoice_receipt' && (
+                                <button
+                                  className="receipts-btn receipts-btn-approve"
+                                  style={{ fontSize: 12, padding: '3px 10px' }}
+                                  onClick={() => closeEinvoice(rec)}
+                                  disabled={closingEinvoice === rec.id}
+                                >
+                                  {closingEinvoice === rec.id ? 'סוגר...' : 'סגור חשבונית'}
+                                </button>
+                                )}
+                                <button
+                                  className="receipts-btn receipts-btn-reject"
+                                  style={{ fontSize: 12, padding: '3px 8px' }}
+                                  onClick={() => deleteReceipt(rec)}
+                                  disabled={deleting === rec.id}
+                                >בטל</button>
+                              </div>
+                            </td>
+                          </tr>
+                        ))}
+                        {txnRows(bankOnly)}
+                      </tbody>
+                    </table>
+                  </div>
+                )
+              )}
+
+              {activeTab === 'credit' && (
+                creditOnly.length === 0 ? (
+                  <p className="receipts-empty">אין תנועות אשראי פתוחות בתקופה זו</p>
+                ) : (
+                  <div className="receipts-table-wrap">
+                    <table className="receipts-table">
+                      <thead>
+                        <tr>
+                          <th>תאריך</th>
+                          <th>תיאור תנועה</th>
+                          <th>סכום</th>
+                          <th>כרטיס אשראי</th>
+                          <th>סניף</th>
+                          <th>פעולה</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {txnRows(creditOnly)}
+                      </tbody>
+                    </table>
+                  </div>
+                )
               )}
             </section>
-
-            {/* ── Section: Unmatched credit lines ── */}
-            {creditOnly.length > 0 && (
-            <section className="receipts-section">
-              <div className="receipts-section-header">
-                <h2>תנועות אשראי ללא התאמה</h2>
-                <span className="receipts-badge" style={{ background: '#7c3aed' }}>{creditOnly.length}</span>
-              </div>
-              <div className="receipts-table-wrap">
-                <table className="receipts-table">
-                  <thead>
-                    <tr>
-                      <th>תאריך</th>
-                      <th>תיאור תנועה</th>
-                      <th>סכום</th>
-                      <th>כרטיס אשראי</th>
-                      <th>סניף</th>
-                      <th>פעולה</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {txnRows(creditOnly)}
-                  </tbody>
-                </table>
-              </div>
-            </section>
-            )}
 
             {/* ── Section A: פעולות שבוצעו בפריוריטי ── */}
             {(() => {
