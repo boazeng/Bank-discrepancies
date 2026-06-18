@@ -7,7 +7,7 @@
 .app-header {
   display: flex;
   align-items: center;
-  gap: 16px;
+  gap: 40px;
   justify-content: flex-end;
   background: transparent;
   padding: 8px 0 16px;
@@ -16,7 +16,7 @@
 }
 
 .app-header-tact-logo {
-  height: 44px;
+  height: 30px;
   width: auto;
   flex-shrink: 0;
 }
@@ -24,9 +24,9 @@
 .app-header-page-title {
   background: #f0efea;
   color: #1C1B19;
-  font-size: 14px;
-  font-weight: 500;
-  padding: 7px 18px;
+  font-size: 17px;
+  font-weight: 600;
+  padding: 9px 24px;
   border-radius: 22px;
   border: 1px solid #D8D4C8;
   letter-spacing: 0.2px;
