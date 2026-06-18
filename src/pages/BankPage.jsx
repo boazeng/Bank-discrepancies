@@ -38,6 +38,7 @@ export default function BankPage() {
   const [doneActions, setDoneActions]     = useState([])
   const [doneFilterBranch, setDoneFilterBranch] = useState('all')
   const [doneFilterAction, setDoneFilterAction] = useState('all')
+  const [draftFilterBranch, setDraftFilterBranch] = useState('all')
   const [loading, setLoading]     = useState(true)
   const [error, setError]         = useState('')
 
@@ -835,7 +836,7 @@ export default function BankPage() {
       <div className="receipts-container">
 
         <header className="app-header">
-          <span className="app-header-page-title">תנועות בנק</span>
+          <span className="app-header-page-title">מערכת הנהלת חשבונות</span>
           <img src="/tact-logo.svg" alt="tact" className="app-header-tact-logo" />
         </header>
 
@@ -1027,16 +1028,17 @@ export default function BankPage() {
 
           return (
           <>
-            {/* ── Tabbed section: bank / credit ── */}
+            {/* ── Section 1: תנועות שטרם נרשמו ── */}
             <section className="receipts-section">
               <div className="receipts-section-header">
+                <h2>תנועות שטרם נרשמו</h2>
                 <div className="receipts-tabs">
                   <button
                     className={`receipts-tab${activeTab === 'bank' ? ' receipts-tab-active' : ''}`}
                     onClick={() => setActiveTab('bank')}
                   >
                     תנועות בנק
-                    <span className="receipts-tab-badge">{bankOnly.length + draftReceipts.length}</span>
+                    <span className="receipts-tab-badge">{bankOnly.length}</span>
                   </button>
                   <button
                     className={`receipts-tab${activeTab === 'credit' ? ' receipts-tab-active receipts-tab-active-credit' : ''}`}
@@ -1050,7 +1052,7 @@ export default function BankPage() {
               </div>
 
               {activeTab === 'bank' && (
-                bankOnly.length === 0 && draftReceipts.length === 0 ? (
+                bankOnly.length === 0 ? (
                   <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
                 ) : (
                   <div className="receipts-table-wrap">
@@ -1066,54 +1068,6 @@ export default function BankPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {draftReceipts.map(rec => (
-                          <tr key={rec.id} style={{ background: '#fffbeb' }}>
-                            <td>{fmt(rec.approved_at || rec.created_at)}</td>
-                            <td>
-                              <div style={{ fontWeight: 600 }}>{rec.accdes || rec.accname}</div>
-                              <div style={{ fontSize: 11, color: '#6b7280' }}>{rec.details}</div>
-                            </td>
-                            <td><AmountCell sum1={rec.totprice} direction="+" /></td>
-                            <td className="receipts-small">{rec.cashname}</td>
-                            <td>{rec.branchname}</td>
-                            <td>
-                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                                <span style={{ fontSize: 11, padding: '2px 7px', borderRadius: 8,
-                                  background: rec.doc_type === 'invoice_receipt' ? '#f5f3ff' : '#fef3c7',
-                                  color:      rec.doc_type === 'invoice_receipt' ? '#7c3aed'  : '#92400e',
-                                  fontWeight: 600 }}>
-                                  {rec.doc_type === 'invoice_receipt' ? 'חשבונית מס קבלה' : 'טיוטה'}: {rec.priority_ivnum}
-                                </span>
-                                {rec.doc_type !== 'invoice_receipt' && (
-                                <button
-                                  className="receipts-btn receipts-btn-approve"
-                                  style={{ fontSize: 12, padding: '3px 10px' }}
-                                  onClick={() => closeReceipt(rec)}
-                                  disabled={closing === rec.id}
-                                >
-                                  {closing === rec.id ? 'סוגר...' : 'סגור קבלה'}
-                                </button>
-                                )}
-                                {rec.doc_type === 'invoice_receipt' && (
-                                <button
-                                  className="receipts-btn receipts-btn-approve"
-                                  style={{ fontSize: 12, padding: '3px 10px' }}
-                                  onClick={() => closeEinvoice(rec)}
-                                  disabled={closingEinvoice === rec.id}
-                                >
-                                  {closingEinvoice === rec.id ? 'סוגר...' : 'סגור חשבונית'}
-                                </button>
-                                )}
-                                <button
-                                  className="receipts-btn receipts-btn-reject"
-                                  style={{ fontSize: 12, padding: '3px 8px' }}
-                                  onClick={() => deleteReceipt(rec)}
-                                  disabled={deleting === rec.id}
-                                >בטל</button>
-                              </div>
-                            </td>
-                          </tr>
-                        ))}
                         {txnRows(bankOnly)}
                       </tbody>
                     </table>
@@ -1146,22 +1100,240 @@ export default function BankPage() {
               )}
             </section>
 
-            {/* ── Section A: פעולות שבוצעו בפריוריטי ── */}
+            {/* ── Section 2: טיוטות ── */}
             {(() => {
-              const sentJournals = doneActions.filter(it => it.priority_fncnum && it.action !== 'receipt')
-              const total = closedReceipts.length + sentJournals.length
+              const nonFinalActions = doneActions.filter(it => it.priority_fncnum && !it.is_final)
+              const closedDrafts = closedReceipts.filter(r => !(r.doc_type === 'invoice_receipt' ? r.final_ivnum : r.rc_ivnum))
+              const total = draftReceipts.length + closedDrafts.length + nonFinalActions.length
+              if (total === 0) return null
+
+              const draftBranches = [...new Set([
+                ...draftReceipts.map(r => r.branchname).filter(Boolean),
+                ...closedDrafts.map(r => r.branchname).filter(Boolean),
+                ...nonFinalActions.map(r => r.branchname).filter(Boolean),
+              ])].sort()
+
+              const filteredDraftReceipts = draftReceipts.filter(r =>
+                draftFilterBranch === 'all' || r.branchname === draftFilterBranch
+              )
+              const filteredClosedDrafts = closedDrafts.filter(r =>
+                draftFilterBranch === 'all' || r.branchname === draftFilterBranch
+              )
+              const filteredNonFinalActions = nonFinalActions.filter(r =>
+                draftFilterBranch === 'all' || r.branchname === draftFilterBranch
+              )
+
+              return (
+              <section className="receipts-section">
+                <div className="receipts-section-header">
+                  <h2>טיוטות</h2>
+                  <span className="receipts-badge" style={{ background: '#f59e0b' }}>{total}</span>
+                  {draftBranches.length > 0 && (
+                    <div className="receipts-days-selector">
+                      <label>סניף:</label>
+                      <select value={draftFilterBranch} onChange={e => setDraftFilterBranch(e.target.value)}>
+                        <option value="all">כל הסניפים</option>
+                        {draftBranches.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                  )}
+                </div>
+                <div className="receipts-table-wrap">
+                  <table className="receipts-table">
+                    <thead>
+                      <tr>
+                        <th>תאריך</th>
+                        <th>תיאור</th>
+                        <th>סכום</th>
+                        <th>סוג פעולה</th>
+                        <th>מספר טיוטה</th>
+                        <th>סניף</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {filteredDraftReceipts.map(rec => {
+                        const s = ACTION_STYLES[rec.doc_type] || ACTION_STYLES.receipt
+                        return (
+                          <tr key={rec.id}>
+                            <td>{fmt(rec.approved_at || rec.created_at)}</td>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{rec.accdes || rec.accname}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>{rec.details}</div>
+                            </td>
+                            <td><AmountCell sum1={rec.totprice} direction="+" /></td>
+                            <td>
+                              <span className="receipts-action-label" style={{ color: s.color, background: s.bg }}>
+                                {s.label}
+                              </span>
+                            </td>
+                            <td className="receipts-mono">
+                              <span style={{ fontSize: 12, color: '#6b7280' }}>טיוטה: {rec.priority_ivnum || '—'}</span>
+                            </td>
+                            <td>{rec.branchname}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                {rec.doc_type !== 'invoice_receipt' && (
+                                  <button
+                                    className="receipts-btn receipts-btn-approve"
+                                    style={{ fontSize: 12, padding: '3px 10px' }}
+                                    onClick={() => closeReceipt(rec)}
+                                    disabled={closing === rec.id}
+                                  >
+                                    {closing === rec.id ? 'סוגר...' : 'סגור קבלה'}
+                                  </button>
+                                )}
+                                {rec.doc_type === 'invoice_receipt' && (
+                                  <button
+                                    className="receipts-btn receipts-btn-approve"
+                                    style={{ fontSize: 12, padding: '3px 10px' }}
+                                    onClick={() => closeEinvoice(rec)}
+                                    disabled={closingEinvoice === rec.id}
+                                  >
+                                    {closingEinvoice === rec.id ? 'סוגר...' : 'סגור חשבונית'}
+                                  </button>
+                                )}
+                                <button
+                                  className="receipts-btn receipts-btn-reject"
+                                  style={{ fontSize: 12, padding: '3px 8px' }}
+                                  onClick={() => deleteReceipt(rec)}
+                                  disabled={deleting === rec.id}
+                                >בטל</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {filteredClosedDrafts.map(rec => {
+                        const s = ACTION_STYLES[rec.doc_type] || ACTION_STYLES.receipt
+                        return (
+                          <tr key={rec.id}>
+                            <td>{fmt(rec.approved_at || rec.created_at)}</td>
+                            <td>
+                              <div style={{ fontWeight: 600 }}>{rec.accdes || rec.accname}</div>
+                              <div style={{ fontSize: 11, color: '#6b7280' }}>{rec.details}</div>
+                            </td>
+                            <td><AmountCell sum1={rec.totprice} direction="+" /></td>
+                            <td>
+                              <span className="receipts-action-label" style={{ color: s.color, background: s.bg }}>
+                                {s.label}
+                              </span>
+                            </td>
+                            <td className="receipts-mono">
+                              <span style={{ fontSize: 12, color: '#6b7280' }}>נשלח לפריוריטי: {rec.priority_ivnum || '—'}</span>
+                            </td>
+                            <td>{rec.branchname}</td>
+                            <td>
+                              <div style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                                <button
+                                  className="receipts-btn receipts-btn-approve"
+                                  style={{ fontSize: 12, padding: '3px 10px' }}
+                                  onClick={() => refreshFinalNumbers(rec)}
+                                  disabled={refreshingFinal === rec.id}
+                                >
+                                  {refreshingFinal === rec.id ? '...' : 'רענן מספרים'}
+                                </button>
+                                <button
+                                  className="receipts-btn receipts-btn-reject"
+                                  style={{ fontSize: 12, padding: '3px 8px' }}
+                                  onClick={() => deleteReceipt(rec)}
+                                  disabled={deleting === rec.id}
+                                >מחוק</button>
+                              </div>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                      {filteredNonFinalActions.map(item => {
+                        const actionLabel = item.action === 'transfer' ? 'העברה בנקאית' : 'פקודת יומן'
+                        const actionColor = item.action === 'transfer' ? '#1d4ed8' : '#b45309'
+                        const actionBg    = item.action === 'transfer' ? '#eff6ff'  : '#fff7ed'
+                        return (
+                          <tr key={item.id}>
+                            <td>{fmt(item.curdate)}</td>
+                            <td>
+                              <div>{item.details}</div>
+                              <div style={{ fontSize: 10, color: '#9ca3af' }}>
+                                {item.accname1}{item.accdes1 ? ` · ${item.accdes1}` : ''}{item.accname2 ? ` → ${item.accname2}` : ''}
+                              </div>
+                            </td>
+                            <td><AmountCell sum1={item.sum1} direction={item.direction} /></td>
+                            <td>
+                              <span className="receipts-action-label" style={{ color: actionColor, background: actionBg }}>
+                                {actionLabel}
+                              </span>
+                            </td>
+                            <td className="receipts-mono" style={{ fontSize: 11 }}>
+                              <div style={{ color: '#6c5ce7', fontWeight: 700 }}>{item.priority_fncnum}</div>
+                            </td>
+                            <td>{item.branchname}</td>
+                            <td style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
+                              {item.action === 'transfer' ? (
+                                <button
+                                  onClick={() => finalizeTransfer(item.priority_fncnum)}
+                                  disabled={finalizingTransfer === item.priority_fncnum}
+                                  style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                                           background: '#eff6ff', border: '1px solid #1d4ed8',
+                                           borderRadius: 4, color: '#1d4ed8', whiteSpace: 'nowrap' }}
+                                >
+                                  {finalizingTransfer === item.priority_fncnum ? '...' : 'אישור העברה בנקאית'}
+                                </button>
+                              ) : (
+                                <button
+                                  onClick={() => finalizeJournal(item.priority_fncnum)}
+                                  disabled={finalizingJournal === item.priority_fncnum}
+                                  style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                                           background: '#fff7ed', border: '1px solid #b45309',
+                                           borderRadius: 4, color: '#b45309', whiteSpace: 'nowrap' }}
+                                >
+                                  {finalizingJournal === item.priority_fncnum ? '...' : 'רישום תנועת יומן'}
+                                </button>
+                              )}
+                              <button
+                                onClick={() => cancelAction(item.id)}
+                                disabled={cancellingAction === item.id}
+                                style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                                         background: '#fef2f2', border: '1px solid #dc2626',
+                                         borderRadius: 4, color: '#dc2626', whiteSpace: 'nowrap' }}
+                              >
+                                {cancellingAction === item.id ? '...' : 'החזר לרשימה'}
+                              </button>
+                              <button
+                                onClick={() => deleteAction(item.id)}
+                                style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
+                                         background: '#f9fafb', border: '1px solid #9ca3af',
+                                         borderRadius: 4, color: '#6b7280', whiteSpace: 'nowrap' }}
+                              >
+                                מחוק
+                              </button>
+                            </td>
+                          </tr>
+                        )
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </section>
+              )
+            })()}
+
+            {/* ── Section 3: פקודות סופיות ── */}
+            {(() => {
+              const finalActions = doneActions.filter(it => it.priority_fncnum && it.is_final)
+              const closedFinal = closedReceipts.filter(r => r.doc_type === 'invoice_receipt' ? r.final_ivnum : r.rc_ivnum)
+              const total = closedFinal.length + finalActions.length
               if (total === 0) return null
 
               const doneBranches = [...new Set([
-                ...closedReceipts.map(r => r.branchname).filter(Boolean),
-                ...sentJournals.map(r => r.branchname).filter(Boolean),
+                ...closedFinal.map(r => r.branchname).filter(Boolean),
+                ...finalActions.map(r => r.branchname).filter(Boolean),
               ])].sort()
 
-              const filteredReceipts = closedReceipts.filter(r =>
+              const filteredReceipts = closedFinal.filter(r =>
                 (doneFilterBranch === 'all' || r.branchname === doneFilterBranch) &&
                 (doneFilterAction === 'all' || r.doc_type === doneFilterAction)
               )
-              const filteredJournals = sentJournals.filter(r =>
+              const filteredFinalActions = finalActions.filter(r =>
                 (doneFilterBranch === 'all' || r.branchname === doneFilterBranch) &&
                 (doneFilterAction === 'all' || r.action === doneFilterAction)
               )
@@ -1169,7 +1341,7 @@ export default function BankPage() {
               return (
               <section className="receipts-section">
                 <div className="receipts-section-header">
-                  <h2>פעולות שבוצעו בפריוריטי</h2>
+                  <h2>פקודות סופיות</h2>
                   <span className="receipts-badge" style={{ background: '#16a34a' }}>{total}</span>
                   <div className="receipts-days-selector">
                     <label>סניף:</label>
@@ -1266,86 +1438,53 @@ export default function BankPage() {
                           </tr>
                         )
                       })}
-                      {filteredJournals.map(item => {
+                      {filteredFinalActions.map(item => {
                         const actionLabel = item.action === 'transfer' ? 'העברה בנקאית' : 'פקודת יומן'
                         const actionColor = item.action === 'transfer' ? '#1d4ed8' : '#b45309'
                         const actionBg    = item.action === 'transfer' ? '#eff6ff'  : '#fff7ed'
                         return (
-                        <tr key={item.id} style={{ opacity: item.is_final ? 0.65 : 0.9 }}>
-                          <td>{fmt(item.curdate)}</td>
-                          <td>
-                            <div>{item.details}</div>
-                            <div style={{ fontSize: 10, color: '#9ca3af' }}>
-                              {item.accname1}{item.accdes1 ? ` · ${item.accdes1}` : ''}{item.accname2 ? ` → ${item.accname2}` : ''}
-                            </div>
-                          </td>
-                          <td><AmountCell sum1={item.sum1} direction={item.direction} /></td>
-                          <td>
-                            <span className="receipts-action-label" style={{ color: actionColor, background: actionBg }}>
-                              {actionLabel}
-                            </span>
-                          </td>
-                          <td className="receipts-mono" style={{ fontSize: 11 }}>
-                            {item.action === 'transfer' ? (
-                              <>
-                                <div style={{ color: item.is_final ? '#1d4ed8' : '#6c5ce7', fontWeight: 700 }}>{item.priority_fncnum}</div>
-                                {item.journal_fncnum && (
-                                  <div style={{ color: '#b45309', fontWeight: 600, fontSize: 10 }}>תנועת יומן: {item.journal_fncnum}</div>
-                                )}
-                                {item.is_final && <div style={{ fontSize: 10, color: '#15803d', fontWeight: 400 }}>סופי</div>}
-                              </>
-                            ) : (
-                              <>
-                                <div style={{ color: item.is_final ? '#15803d' : '#6c5ce7', fontWeight: 700 }}>{item.priority_fncnum}</div>
-                                {item.is_final && <div style={{ fontSize: 10, color: '#15803d', fontWeight: 400 }}>סופי</div>}
-                              </>
-                            )}
-                          </td>
-                          <td>{item.branchname}</td>
-                          <td style={{ display: 'flex', gap: 6, alignItems: 'center', flexWrap: 'wrap' }}>
-                            {!item.is_final && item.action === 'transfer' && (
+                          <tr key={item.id} style={{ opacity: 0.65 }}>
+                            <td>{fmt(item.curdate)}</td>
+                            <td>
+                              <div>{item.details}</div>
+                              <div style={{ fontSize: 10, color: '#9ca3af' }}>
+                                {item.accname1}{item.accdes1 ? ` · ${item.accdes1}` : ''}{item.accname2 ? ` → ${item.accname2}` : ''}
+                              </div>
+                            </td>
+                            <td><AmountCell sum1={item.sum1} direction={item.direction} /></td>
+                            <td>
+                              <span className="receipts-action-label" style={{ color: actionColor, background: actionBg }}>
+                                {actionLabel}
+                              </span>
+                            </td>
+                            <td className="receipts-mono" style={{ fontSize: 11 }}>
+                              {item.action === 'transfer' ? (
+                                <>
+                                  <div style={{ color: '#1d4ed8', fontWeight: 700 }}>{item.priority_fncnum}</div>
+                                  {item.journal_fncnum && (
+                                    <div style={{ color: '#b45309', fontWeight: 600, fontSize: 10 }}>תנועת יומן: {item.journal_fncnum}</div>
+                                  )}
+                                  <div style={{ fontSize: 10, color: '#15803d', fontWeight: 400 }}>סופי</div>
+                                </>
+                              ) : (
+                                <>
+                                  <div style={{ color: '#15803d', fontWeight: 700 }}>{item.priority_fncnum}</div>
+                                  <div style={{ fontSize: 10, color: '#15803d', fontWeight: 400 }}>סופי</div>
+                                </>
+                              )}
+                            </td>
+                            <td>{item.branchname}</td>
+                            <td>
                               <button
-                                onClick={() => finalizeTransfer(item.priority_fncnum)}
-                                disabled={finalizingTransfer === item.priority_fncnum}
+                                onClick={() => deleteAction(item.id)}
                                 style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
-                                         background: '#eff6ff', border: '1px solid #1d4ed8',
-                                         borderRadius: 4, color: '#1d4ed8', whiteSpace: 'nowrap' }}
+                                         background: '#f9fafb', border: '1px solid #9ca3af',
+                                         borderRadius: 4, color: '#6b7280', whiteSpace: 'nowrap' }}
                               >
-                                {finalizingTransfer === item.priority_fncnum ? '...' : 'אישור העברה בנקאית'}
+                                מחוק
                               </button>
-                            )}
-                            {!item.is_final && item.action !== 'transfer' && (
-                              <button
-                                onClick={() => finalizeJournal(item.priority_fncnum)}
-                                disabled={finalizingJournal === item.priority_fncnum}
-                                style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
-                                         background: '#fff7ed', border: '1px solid #b45309',
-                                         borderRadius: 4, color: '#b45309', whiteSpace: 'nowrap' }}
-                              >
-                                {finalizingJournal === item.priority_fncnum ? '...' : 'רישום תנועת יומן'}
-                              </button>
-                            )}
-                            {!item.is_final && (
-                              <button
-                                onClick={() => cancelAction(item.id)}
-                                disabled={cancellingAction === item.id}
-                                style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
-                                         background: '#fef2f2', border: '1px solid #dc2626',
-                                         borderRadius: 4, color: '#dc2626', whiteSpace: 'nowrap' }}
-                              >
-                                {cancellingAction === item.id ? '...' : 'החזר לרשימה'}
-                              </button>
-                            )}
-                            <button
-                              onClick={() => deleteAction(item.id)}
-                              style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
-                                       background: '#f9fafb', border: '1px solid #9ca3af',
-                                       borderRadius: 4, color: '#6b7280', whiteSpace: 'nowrap' }}
-                            >
-                              מחוק
-                            </button>
-                          </td>
-                        </tr>
+                            </td>
+                          </tr>
                         )
                       })}
                     </tbody>
