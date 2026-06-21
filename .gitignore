@@ -20,3 +20,7 @@ server_*.log
 
 # Runtime state — data lives in the volume, not git
 database/receipts/*.json
+
+# Recommendations SQLite DB (runtime state, lives in the volume)
+database/receipts/*.db
+database/receipts/*.db-*

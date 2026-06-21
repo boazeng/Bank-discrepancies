@@ -151,6 +151,25 @@ except Exception as _jt_db_err:
     logger.error(f"journal_templates_db load FAILED: {_jt_db_err}")
     journal_templates_db = None
 
+# Load journal-recommendations database module (SQLite + FTS5)
+try:
+    rec_db_path = PROJECT_ROOT / "database" / "receipts" / "recommendations_db.py"
+    spec_rec2_db = importlib.util.spec_from_file_location("recommendations_db", rec_db_path)
+    recommendations_db = importlib.util.module_from_spec(spec_rec2_db)
+    sys.modules["recommendations_db"] = recommendations_db
+    spec_rec2_db.loader.exec_module(recommendations_db)
+    # One-time seed from the old journal_templates.json on an empty DB.
+    if recommendations_db.count() == 0 and journal_templates_db:
+        try:
+            seeded = recommendations_db.seed_from_templates(journal_templates_db.list_templates())
+            logger.info(f"recommendations_db seeded {seeded} rows from journal_templates")
+        except Exception as _seed_err:
+            logger.warning(f"recommendations_db seed skipped: {_seed_err}")
+    logger.info(f"recommendations_db loaded from {rec_db_path}")
+except Exception as _rec2_db_err:
+    logger.error(f"recommendations_db load FAILED: {_rec2_db_err}")
+    recommendations_db = None
+
 app = Flask(__name__)
 CORS(app)
 
@@ -2430,6 +2449,82 @@ def import_existing_receipt():
         if rec is None:
             return jsonify({"ok": True, "duplicate": True})
         return jsonify({"ok": True, "id": rec["id"]})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── Journal recommendations (SQLite + FTS5) ──────────────────────────────────
+
+@app.route("/api/receipts/recommendations", methods=["GET"])
+def recommendations_list():
+    if not recommendations_db:
+        return jsonify({"ok": False, "error": "recommendations DB unavailable"}), 500
+    try:
+        q = (request.args.get("q") or "").strip()
+        rows = recommendations_db.list_all(q=q)
+        return jsonify({"ok": True, "recommendations": rows, "total": recommendations_db.count()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/recommendations", methods=["POST"])
+def recommendations_add():
+    if not recommendations_db:
+        return jsonify({"ok": False, "error": "recommendations DB unavailable"}), 500
+    try:
+        d = request.get_json(force=True) or {}
+        rec = recommendations_db.add(
+            details=d.get("details", ""),
+            counterpart_account=d.get("counterpart_account", ""),
+            counterpart_desc=d.get("counterpart_desc", ""),
+            cashname=d.get("cashname", ""),
+            branch=d.get("branch", ""),
+            direction=d.get("direction", ""),
+        )
+        if not rec:
+            return jsonify({"ok": False, "error": "חסר פירוט או חשבון נגדי"}), 400
+        return jsonify({"ok": True, "recommendation": rec})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/recommendations/<rid>/update", methods=["POST"])
+def recommendations_update(rid):
+    if not recommendations_db:
+        return jsonify({"ok": False, "error": "recommendations DB unavailable"}), 500
+    try:
+        d = request.get_json(force=True) or {}
+        rec = recommendations_db.update(rid, **d)
+        if not rec:
+            return jsonify({"ok": False, "error": "לא נמצא"}), 404
+        return jsonify({"ok": True, "recommendation": rec})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/recommendations/<rid>/delete", methods=["POST"])
+def recommendations_delete(rid):
+    if not recommendations_db:
+        return jsonify({"ok": False, "error": "recommendations DB unavailable"}), 500
+    try:
+        return jsonify({"ok": recommendations_db.delete(rid)})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/recommendations/match", methods=["GET"])
+def recommendations_match():
+    """Rank recommendations for a transaction's details (test/preview)."""
+    if not recommendations_db:
+        return jsonify({"ok": False, "error": "recommendations DB unavailable"}), 500
+    try:
+        rows = recommendations_db.match(
+            details=request.args.get("details", ""),
+            cashname=request.args.get("cashname", ""),
+            branch=request.args.get("branch", ""),
+            direction=request.args.get("direction", ""),
+        )
+        return jsonify({"ok": True, "matches": rows})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
