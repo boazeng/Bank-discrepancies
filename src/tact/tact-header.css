@@ -1,0 +1,58 @@
+/* Scoped TACT header styling — only the :root tokens (safe — definitions only),
+   the brand fonts, and the .tact-bar / .tact-nav recipes. Intentionally WITHOUT
+   the global body/* reset from the full design system, so the existing BankPage
+   styling is left untouched. */
+@import url('https://fonts.googleapis.com/css2?family=Heebo:wght@400;500;600;700;800&family=Space+Grotesk:wght@500;600;700&display=swap');
+
+:root {
+  --color-primary: #1F3A5F;
+  --color-primary-light: #2A4F7A;
+  --color-accent: #D64A2E;
+  --color-pos: #2F8F5B;
+  --color-ink: #1C1B19;
+  --color-bg-white: #FFFEFB;
+  --color-text: #2A2A28;
+  --color-text-light: #706A60;
+  --color-text-white: #F4F1EA;
+  --color-border: #E7E2D6;
+  --font-family: 'Heebo', 'Assistant', 'Segoe UI', Tahoma, Arial, sans-serif;
+  --font-size-sm: 0.875rem;
+  --header-height: 64px;
+}
+
+/* sticky light header */
+.tact-bar {
+  position: sticky; top: 0; z-index: 100;
+  min-height: var(--header-height);
+  display: flex; align-items: center; gap: 22px;
+  background: var(--color-bg-white);
+  border-bottom: 1px solid var(--color-border);
+  box-shadow: 0 1px 8px rgba(28, 27, 25, 0.04);
+  padding: 8px 24px;
+}
+
+/* floating-pill nav */
+.tact-nav {
+  display: flex; align-items: center; gap: 4px;
+  background: var(--color-bg-white);
+  border: 1px solid var(--color-border);
+  border-radius: 999px; padding: 5px;
+  box-shadow: 0 6px 18px rgba(31, 58, 95, 0.08);
+}
+.tact-nav button {
+  display: inline-flex; align-items: center; gap: 7px;
+  padding: 8px 16px; border-radius: 999px;
+  font-family: var(--font-family);
+  font-size: var(--font-size-sm); font-weight: 500;
+  color: var(--color-text-light);
+  background: transparent; border: none; cursor: pointer;
+  transition: background .18s, color .18s, transform .18s;
+}
+.tact-nav button:not(.active):hover {
+  background: rgba(31, 58, 95, 0.14); color: var(--color-primary);
+  font-weight: 600; transform: translateY(-1px);
+}
+.tact-nav button.active {
+  background: var(--color-primary); color: var(--color-text-white);
+  font-weight: 600;
+}

@@ -1,27 +1,30 @@
 import React, { useState } from 'react'
 import BankPage from './pages/BankPage'
 import RecommendationsPage from './pages/RecommendationsPage'
+import TactLogo from './tact/TactLogo'
+import TactIcon from './tact/TactIcon'
+import './tact/tact-header.css'
 
-const tab = (active) => ({
-  background: active ? '#1d4ed8' : 'transparent',
-  color: '#fff',
-  border: active ? 'none' : '1px solid #334155',
-  borderRadius: 8,
-  padding: '8px 18px',
-  cursor: 'pointer',
-  fontWeight: 700,
-  fontSize: 14,
-})
+const NAV = [
+  { key: 'bank', label: 'תנועות בנק', icon: 'swap' },
+  { key: 'recs', label: 'מאגר המלצות', icon: 'database' },
+]
 
 export default function App() {
   const [view, setView] = useState('bank')
   return (
-    <div>
-      <nav style={{ display: 'flex', gap: 8, padding: '10px 20px', background: '#0f172a',
-        position: 'sticky', top: 0, zIndex: 100 }}>
-        <button style={tab(view === 'bank')} onClick={() => setView('bank')}>תנועות בנק</button>
-        <button style={tab(view === 'recs')} onClick={() => setView('recs')}>מאגר המלצות</button>
-      </nav>
+    <div dir="rtl">
+      <div className="tact-bar" style={{ justifyContent: 'space-between' }}>
+        <TactLogo word="accounting" size={1} />
+        <nav className="tact-nav">
+          {NAV.map(n => (
+            <button key={n.key} className={view === n.key ? 'active' : ''} onClick={() => setView(n.key)}>
+              <TactIcon name={n.icon} size={17} />
+              {n.label}
+            </button>
+          ))}
+        </nav>
+      </div>
       {view === 'bank' ? <BankPage /> : <RecommendationsPage />}
     </div>
   )

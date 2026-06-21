@@ -835,11 +835,6 @@ export default function BankPage() {
     <div className="receipts-page" dir="rtl">
       <div className="receipts-container">
 
-        <header className="app-header">
-          <span className="app-header-page-title">מערכת הנהלת חשבונות</span>
-          <img src="/tact-logo.svg" alt="tact" className="app-header-tact-logo" />
-        </header>
-
         {loading && <p className="receipts-loading">טוען נתונים...</p>}
         {error   && <p className="receipts-error">{error}</p>}
 

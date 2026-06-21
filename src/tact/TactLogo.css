@@ -1,0 +1,58 @@
+.tact-logo {
+  display: inline-flex;
+  font-size: calc(1rem * var(--tact-scale, 1));
+}
+.tact-logo-lockup { display: flex; flex-direction: column; gap: 5px; }
+/* LTR so T·A·C·T reads correctly inside an RTL page */
+.tact-logo-row {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 11px;
+  direction: ltr;
+}
+.tact-logo-word {
+  order: 2;
+  font-size: 0.78em;
+  font-weight: 500;
+  letter-spacing: 0.02em;
+}
+.tact-logo-mark { display: inline-flex; align-items: center; order: 1; }
+.tact-logo-seg { display: inline-flex; align-items: center; }
+.tact-logo-letter {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-weight: 700;
+  font-size: 1.55em;
+  letter-spacing: -0.02em;
+  line-height: 1;
+}
+.tact-logo-dot {
+  width: 0.32em;
+  height: 0.32em;
+  border-radius: 50%;
+  background: var(--color-accent);
+  margin: 0 0.28em;
+  align-self: center;
+}
+.tact-logo-tagline {
+  font-family: 'Space Grotesk', system-ui, sans-serif;
+  font-size: 0.5em;
+  font-weight: 600;
+  letter-spacing: 0.06em;
+  text-align: center;
+}
+
+/* light surfaces */
+.tact-logo-light .tact-logo-letter { color: var(--color-text); }
+.tact-logo-light .tact-logo-word { color: var(--color-text-light); }
+.tact-logo-light .tact-logo-tagline { color: var(--color-text-light); }
+
+/* dark chip */
+.tact-logo-dark {
+  background: var(--color-ink);
+  color: var(--color-text-white);
+  padding: 12px 20px;
+  border-radius: 12px;
+}
+.tact-logo-dark .tact-logo-letter { color: var(--color-text-white); }
+.tact-logo-dark .tact-logo-word { color: rgba(244, 241, 234, 0.6); }
+.tact-logo-dark .tact-logo-tagline { color: rgba(244, 241, 234, 0.5); }
