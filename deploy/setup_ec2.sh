@@ -19,13 +19,13 @@ ENV_FILE="$ENV_DIR/.env"
 echo "== Bank Discrepancies EC2 setup =="
 echo "user=$APP_USER  app_dir=$APP_DIR  env_file=$ENV_FILE"
 
-# 1. System packages (Python + git; Node only if you want to rebuild the UI)
+# 1. System packages (Python + git + Node.js for close_receipt scripts)
 if command -v dnf &>/dev/null; then
-    sudo dnf install -y python3.11 python3.11-pip git nginx
+    sudo dnf install -y python3.11 python3.11-pip git nginx nodejs npm
     PYTHON=python3.11
 elif command -v apt &>/dev/null; then
     sudo apt update -y
-    sudo apt install -y python3 python3-pip python3-venv git nginx
+    sudo apt install -y python3 python3-pip python3-venv git nginx nodejs npm
     PYTHON=python3
 else
     echo "Unsupported OS (need dnf or apt)" >&2; exit 1
@@ -44,6 +44,9 @@ cd "$APP_DIR"
 $PYTHON -m venv .venv
 ./.venv/bin/pip install --upgrade pip
 ./.venv/bin/pip install -r requirements.txt
+
+# 3b. Node dependencies for close_receipt scripts
+(cd backend/close_receipt && npm install --omit=dev)
 
 # 4. Secrets: central .env OUTSIDE the repo, chmod 600, never in git.
 mkdir -p "$ENV_DIR"

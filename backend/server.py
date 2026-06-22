@@ -53,6 +53,8 @@ if not logger.handlers:
     logger.addHandler(handler)
 
 import requests
+import urllib3
+urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from requests.auth import HTTPBasicAuth
@@ -72,6 +74,7 @@ _prio_retry = Retry(total=4, connect=4, read=2, backoff_factor=0.4,
 _prio_adapter = HTTPAdapter(max_retries=_prio_retry, pool_connections=20, pool_maxsize=20)
 http_requests.mount("https://", _prio_adapter)
 http_requests.mount("http://", _prio_adapter)
+http_requests.verify = False  # Priority's cert CA doesn't include key usage extension
 http_requests.exceptions = requests.exceptions  # keep existing `http_requests.exceptions.X`
 
 import threading
@@ -331,45 +334,27 @@ def receipts_bank_transactions():
         except Exception:
             pass
 
-        # ── Resolve bank GL accounts and filter out credit-card CASHNAMEs ──────
-        # Query Priority CASH entity for every unique CASHNAME in the raw results.
-        # Bank accounts have ACCNAME (GL) in the CASH entity; credit-card accounts
-        # typically do not — they are filtered out here.
+        # ── Resolve bank GL accounts from CASH_BANKS ─────────────────────────
+        # Load the full CASH_BANKS table in one request (~80 records).
+        # Every active account has ACCNAME set; inactive/unmapped ones are skipped.
         cash_gl_map: dict = {}  # CASHNAME → GL account
 
-        unique_raw_cn = list({l.get("CASHNAME", "") for l in raw_lines if l.get("CASHNAME")})
-
-        uncached_cn = []
-        for cn in unique_raw_cn:
-            if journal_templates_db:
-                cached = journal_templates_db.get_bank_gl(cn)
-                if cached:
-                    cash_gl_map[cn] = cached
-                    continue
-            uncached_cn.append(cn)
-
-        if uncached_cn:
-            try:
-                chunk_size = 15
-                for i in range(0, len(uncached_cn), chunk_size):
-                    chunk = uncached_cn[i:i + chunk_size]
-                    cash_flt = " or ".join(f"CASHNAME eq '{cn}'" for cn in chunk)
-                    r_cash = http_requests.get(
-                        f"{_prio_url()}/CASH?$filter=({cash_flt})"
-                        "&$select=CASHNAME,CASHDES,ACCNAME",
-                        headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
-                    )
-                    if r_cash.status_code == 200:
-                        for cash_rec in r_cash.json().get("value", []):
-                            cn  = (cash_rec.get("CASHNAME") or "").strip()
-                            gl  = (cash_rec.get("ACCNAME")  or "").strip()
-                            des = (cash_rec.get("CASHDES")   or "").strip()
-                            if cn and gl:
-                                cash_gl_map[cn] = gl
-                                if journal_templates_db:
-                                    journal_templates_db.save_bank_gl(cn, gl, des)
-            except Exception as _ce:
-                logger.warning(f"Batch CASH GL lookup failed: {_ce}")
+        try:
+            r_cash = http_requests.get(
+                f"{_prio_url()}/CASH_BANKS?$select=CASHNAME,CASHDES,ACCNAME",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+            )
+            if r_cash.status_code == 200:
+                for cash_rec in r_cash.json().get("value", []):
+                    cn  = (cash_rec.get("CASHNAME") or "").strip()
+                    gl  = (cash_rec.get("ACCNAME")  or "").strip()
+                    des = (cash_rec.get("CASHDES")   or "").strip()
+                    if cn and gl:
+                        cash_gl_map[cn] = gl
+                        if journal_templates_db:
+                            journal_templates_db.save_bank_gl(cn, gl, des)
+        except Exception as _ce:
+            logger.warning(f"CASH_BANKS GL lookup failed: {_ce}")
 
         valid_bank_cn = set(cash_gl_map.keys())
 
@@ -890,10 +875,10 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
         if cached:
             return cached, ""
 
-    # ── Primary: query Priority's CASH entity directly ──────────────────────
+    # ── Primary: query Priority's CASH_BANKS entity ─────────────────────────
     try:
         r = http_requests.get(
-            f"{_prio_url()}/CASH?$filter=CASHNAME eq '{cashname}'"
+            f"{_prio_url()}/CASH_BANKS?$filter=CASHNAME eq '{cashname}'"
             "&$select=CASHNAME,CASHDES,ACCNAME",
             headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
         )
@@ -908,7 +893,7 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
                             journal_templates_db.save_bank_gl(cashname, gl, desc)
                     return gl, desc
     except Exception as _e:
-        logger.warning(f"_detect_bank_gl CASH lookup failed: {_e}")
+        logger.warning(f"_detect_bank_gl CASH_BANKS lookup failed: {_e}")
 
     # ── Fallback: scan recent FNCTRANS for 40xx- accounts ───────────────────
     try:
@@ -954,21 +939,58 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
         return "", ""
 
 
+def _find_node():
+    """Return path to node executable, works on Windows and Linux."""
+    import shutil
+    found = shutil.which("node")
+    if found and os.path.isfile(found):
+        return found
+    candidates = [
+        r"C:\Program Files\nodejs\node.exe",
+        r"C:\Program Files (x86)\nodejs\node.exe",
+        "/usr/bin/node",
+        "/usr/local/bin/node",
+        "/usr/local/nvm/versions/node/current/bin/node",
+    ]
+    for c in candidates:
+        if os.path.isfile(c):
+            return c
+    raise RuntimeError(
+        "Node.js לא נמצא על השרת. "
+        "יש להתקין Node.js ולהריץ 'npm install' בתיקיית backend/close_receipt"
+    )
+
+
+def _node_run(script_dir, args, timeout=90):
+    """subprocess.run for a node script — handles spaces in node path on Windows."""
+    import subprocess
+    node_exe = _find_node()
+    # On Windows, paths with spaces need quoting when building a cmd string
+    def _q(s):
+        return f'"{s}"' if " " in s else s
+    cmd_str = " ".join([_q(node_exe)] + [_q(str(a)) for a in args])
+    return subprocess.run(
+        cmd_str,
+        shell=True,
+        cwd=script_dir,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        timeout=timeout,
+    )
+
+
 def _launch_bank_recon(journal_fncnum, cashname, bank_fncnum="", label=""):
     """Launch bank_recon.js in a background thread (non-blocking, non-fatal)."""
     if not cashname:
         return
     try:
-        import threading, subprocess, shutil
+        import threading
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
-        node_exe   = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-        args = [node_exe, "bank_recon.js",
-                journal_fncnum or "", cashname, bank_fncnum or ""]
         tag = label or f"recon({journal_fncnum},{bank_fncnum})"
         def _run():
             try:
-                r = subprocess.run(args, cwd=script_dir, timeout=120,
-                                   stdout=subprocess.PIPE, stderr=subprocess.PIPE)
+                r = _node_run(script_dir, ["bank_recon.js",
+                              journal_fncnum or "", cashname, bank_fncnum or ""], timeout=120)
                 out = r.stdout.decode("utf-8", errors="replace").strip()
                 err = r.stderr.decode("utf-8", errors="replace").strip()
                 logger.info(f"bank_recon [{tag}] stdout: {out}")
@@ -1263,13 +1285,7 @@ def journal_finalize(priority_fncnum):
             return jsonify({"ok": True, "fncnum": final_fncnum, "draft_fncnum": priority_fncnum, "already_registered": True})
 
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
-        node_exe = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-        result = subprocess.run(
-            [node_exe, "close_journal.js", priority_fncnum],
-            cwd=script_dir,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=90,
-        )
+        result = _node_run(script_dir, ["close_journal.js", priority_fncnum])
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
         stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
         if stderr:
@@ -1354,13 +1370,7 @@ def transfer_finalize(ivnum):
                 return jsonify({"ok": True, "ivnum": ivnum, "final_ivnum": ivnum, "fncnum": fncnum, "already_final": True})
 
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
-        node_exe = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-        result = subprocess.run(
-            [node_exe, "close_transfer.js", ivnum],
-            cwd=script_dir,
-            stdout=subprocess.PIPE, stderr=subprocess.PIPE,
-            timeout=90,
-        )
+        result = _node_run(script_dir, ["close_transfer.js", ivnum])
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
         stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
         if stderr:
@@ -2075,16 +2085,7 @@ def receipts_close(receipt_id):
 
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
 
-        import shutil
-        node_exe = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-
-        result = subprocess.run(
-            [node_exe, "close_receipt.js", priority_ivnum],
-            cwd=script_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=90,
-        )
+        result = _node_run(script_dir, ["close_receipt.js", priority_ivnum])
 
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
         stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
@@ -2223,15 +2224,7 @@ def receipts_close_einvoice(receipt_id):
             return jsonify({"ok": False, "error": "החשבונית עוד לא נשלחה לפריוריטי"}), 400
 
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
-        node_exe = shutil.which("node") or r"C:\Program Files\nodejs\node.exe"
-
-        result = subprocess.run(
-            [node_exe, "close_einvoice.js", priority_ivnum],
-            cwd=script_dir,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            timeout=60,
-        )
+        result = _node_run(script_dir, ["close_einvoice.js", priority_ivnum], timeout=60)
 
         stdout = (result.stdout or b"").decode("utf-8", errors="replace").strip()
         stderr = (result.stderr or b"").decode("utf-8", errors="replace").strip()
@@ -2548,9 +2541,10 @@ if __name__ == "__main__":
         print(f"UI: http://localhost:5000/")
     else:
         print(f"UI dist not built yet (run: npm run build)")
-    print("Starting on http://localhost:5000")
+    port = int(os.environ.get("PORT", 5002))
+    print(f"Starting on http://localhost:{port}")
     app.run(
         host="0.0.0.0",
-        port=5000,
+        port=port,
         debug=False,
     )

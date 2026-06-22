@@ -7,6 +7,7 @@ cd "$APP_DIR"
 echo "== Updating Bank Discrepancies =="
 git pull --ff-only
 ./.venv/bin/pip install -q -r requirements.txt
+(cd backend/close_receipt && npm install --omit=dev --silent)
 sudo systemctl restart bank-discrepancies
 sleep 2
 sudo systemctl --no-pager status bank-discrepancies | head -n 12
