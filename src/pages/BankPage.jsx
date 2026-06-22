@@ -50,6 +50,9 @@ export default function BankPage() {
   const [rowActions, setRowActions] = useState({})
 
   const [activeTab, setActiveTab]     = useState('bank')
+  const [unmatchedOpen, setUnmatchedOpen] = useState(false)
+  const [draftsOpen, setDraftsOpen]       = useState(false)
+  const [finalOpen, setFinalOpen]         = useState(false)
 
   const [days, setDays]               = useState(365)
   const [since, setSince]             = useState('')
@@ -1026,27 +1029,33 @@ export default function BankPage() {
             {/* ── Section 1: תנועות שטרם נרשמו ── */}
             <section className="receipts-section">
               <div className="receipts-section-header">
-                <h2>תנועות שטרם נרשמו</h2>
-                <div className="receipts-tabs">
-                  <button
-                    className={`receipts-tab${activeTab === 'bank' ? ' receipts-tab-active' : ''}`}
-                    onClick={() => setActiveTab('bank')}
-                  >
-                    תנועות בנק
-                    <span className="receipts-tab-badge">{bankOnly.length}</span>
-                  </button>
-                  <button
-                    className={`receipts-tab${activeTab === 'credit' ? ' receipts-tab-active receipts-tab-active-credit' : ''}`}
-                    onClick={() => setActiveTab('credit')}
-                  >
-                    תנועות אשראי
-                    <span className="receipts-tab-badge">{creditOnly.length}</span>
-                  </button>
-                </div>
-                {sharedControls}
+                <h2 style={{cursor:'pointer', userSelect:'none', display:'flex', alignItems:'center', gap:8}} onClick={() => setUnmatchedOpen(o => !o)}>
+                  <span style={{fontSize:11, color:'#9ca3af', fontWeight:400}}>{unmatchedOpen ? '▼' : '▶'}</span>
+                  תנועות שטרם נרשמו
+                  <span className="receipts-tab-badge" style={{background:'#3b82f6', color:'#fff', marginRight:4}}>{bankOnly.length + creditOnly.length}</span>
+                </h2>
+                {unmatchedOpen && <>
+                  <div className="receipts-tabs">
+                    <button
+                      className={`receipts-tab${activeTab === 'bank' ? ' receipts-tab-active' : ''}`}
+                      onClick={() => setActiveTab('bank')}
+                    >
+                      תנועות בנק
+                      <span className="receipts-tab-badge">{bankOnly.length}</span>
+                    </button>
+                    <button
+                      className={`receipts-tab${activeTab === 'credit' ? ' receipts-tab-active receipts-tab-active-credit' : ''}`}
+                      onClick={() => setActiveTab('credit')}
+                    >
+                      תנועות אשראי
+                      <span className="receipts-tab-badge">{creditOnly.length}</span>
+                    </button>
+                  </div>
+                  {sharedControls}
+                </>}
               </div>
 
-              {activeTab === 'bank' && (
+              {unmatchedOpen && activeTab === 'bank' && (
                 bankOnly.length === 0 ? (
                   <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
                 ) : (
@@ -1070,7 +1079,7 @@ export default function BankPage() {
                 )
               )}
 
-              {activeTab === 'credit' && (
+              {unmatchedOpen && activeTab === 'credit' && (
                 creditOnly.length === 0 ? (
                   <p className="receipts-empty">אין תנועות אשראי פתוחות בתקופה זו</p>
                 ) : (
@@ -1121,9 +1130,12 @@ export default function BankPage() {
               return (
               <section className="receipts-section">
                 <div className="receipts-section-header">
-                  <h2>טיוטות</h2>
+                  <h2 style={{cursor:'pointer', userSelect:'none', display:'flex', alignItems:'center', gap:8}} onClick={() => setDraftsOpen(o => !o)}>
+                    <span style={{fontSize:11, color:'#9ca3af', fontWeight:400}}>{draftsOpen ? '▼' : '▶'}</span>
+                    טיוטות
+                  </h2>
                   <span className="receipts-badge" style={{ background: '#f59e0b' }}>{total}</span>
-                  {draftBranches.length > 0 && (
+                  {draftsOpen && draftBranches.length > 0 && (
                     <div className="receipts-days-selector">
                       <label>סניף:</label>
                       <select value={draftFilterBranch} onChange={e => setDraftFilterBranch(e.target.value)}>
@@ -1133,7 +1145,7 @@ export default function BankPage() {
                     </div>
                   )}
                 </div>
-                <div className="receipts-table-wrap">
+                {draftsOpen && <div className="receipts-table-wrap">
                   <table className="receipts-table">
                     <thead>
                       <tr>
@@ -1307,7 +1319,7 @@ export default function BankPage() {
                       })}
                     </tbody>
                   </table>
-                </div>
+                </div>}
               </section>
               )
             })()}
@@ -1336,27 +1348,32 @@ export default function BankPage() {
               return (
               <section className="receipts-section">
                 <div className="receipts-section-header">
-                  <h2>פקודות סופיות</h2>
+                  <h2 style={{cursor:'pointer', userSelect:'none', display:'flex', alignItems:'center', gap:8}} onClick={() => setFinalOpen(o => !o)}>
+                    <span style={{fontSize:11, color:'#9ca3af', fontWeight:400}}>{finalOpen ? '▼' : '▶'}</span>
+                    פקודות סופיות
+                  </h2>
                   <span className="receipts-badge" style={{ background: '#16a34a' }}>{total}</span>
-                  <div className="receipts-days-selector">
-                    <label>סניף:</label>
-                    <select value={doneFilterBranch} onChange={e => setDoneFilterBranch(e.target.value)}>
-                      <option value="all">כל הסניפים</option>
-                      {doneBranches.map(b => <option key={b} value={b}>{b}</option>)}
-                    </select>
-                  </div>
-                  <div className="receipts-days-selector">
-                    <label>פעולה:</label>
-                    <select value={doneFilterAction} onChange={e => setDoneFilterAction(e.target.value)}>
-                      <option value="all">הכל</option>
-                      <option value="receipt">קבלה</option>
-                      <option value="invoice_receipt">חשבונית קבלה</option>
-                      <option value="journal">פקודת יומן</option>
-                      <option value="transfer">העברה בנקאית</option>
-                    </select>
-                  </div>
+                  {finalOpen && <>
+                    <div className="receipts-days-selector">
+                      <label>סניף:</label>
+                      <select value={doneFilterBranch} onChange={e => setDoneFilterBranch(e.target.value)}>
+                        <option value="all">כל הסניפים</option>
+                        {doneBranches.map(b => <option key={b} value={b}>{b}</option>)}
+                      </select>
+                    </div>
+                    <div className="receipts-days-selector">
+                      <label>פעולה:</label>
+                      <select value={doneFilterAction} onChange={e => setDoneFilterAction(e.target.value)}>
+                        <option value="all">הכל</option>
+                        <option value="receipt">קבלה</option>
+                        <option value="invoice_receipt">חשבונית קבלה</option>
+                        <option value="journal">פקודת יומן</option>
+                        <option value="transfer">העברה בנקאית</option>
+                      </select>
+                    </div>
+                  </>}
                 </div>
-                <div className="receipts-table-wrap">
+                {finalOpen && <div className="receipts-table-wrap">
                   <table className="receipts-table">
                     <thead>
                       <tr>
@@ -1484,7 +1501,7 @@ export default function BankPage() {
                       })}
                     </tbody>
                   </table>
-                </div>
+                </div>}
               </section>
               )
             })()}
