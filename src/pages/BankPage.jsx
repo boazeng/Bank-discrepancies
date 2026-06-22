@@ -951,7 +951,7 @@ export default function BankPage() {
                 <label>סניף:</label>
                 <select
                   value={branchFilter}
-                  onChange={e => { const v = e.target.value; setBranchFilter(v); loadAll(undefined, v) }}
+                  onChange={e => { const v = e.target.value; setBranchFilter(v); setDraftFilterBranch(v); setDoneFilterBranch(v); loadAll(undefined, v) }}
                 >
                   <option value="all">כל הסניפים</option>
                   {allBranches.map(b => <option key={b} value={b}>{b}</option>)}
