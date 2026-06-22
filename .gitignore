@@ -24,3 +24,6 @@ database/receipts/*.json
 # Recommendations SQLite DB (runtime state, lives in the volume)
 database/receipts/*.db
 database/receipts/*.db-*
+
+# Built frontend — built inside the Docker image (multi-stage), not committed
+dist/

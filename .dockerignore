@@ -1,4 +1,7 @@
-# Keep the image small: only backend/, database/*.py, dist/, requirements.txt
+# Build context for the multi-stage image.
+# Stage 1 needs the frontend sources (package*.json, src, public, index.html,
+# vite.config.js); stage 2 needs backend/ and database/*.py. Everything below
+# is excluded.
 .git
 .gitignore
 .gitattributes
@@ -7,15 +10,12 @@ node_modules
 __pycache__
 *.pyc
 *.pyo
-src
-public
-package.json
-package-lock.json
-vite.config.js
-index.html
 deploy
 *.md
 .claude
 .env
+dist
 # runtime state comes from the bind-mounted volume, not the image
 database/**/*.json
+database/receipts/*.db
+database/receipts/*.db-*
