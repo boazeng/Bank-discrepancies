@@ -31,7 +31,7 @@ function AmountCell({ sum1, direction }) {
   )
 }
 
-export default function BankPage() {
+export default function BankPage({ mode = 'bank' }) {
   const [bankTxns, setBankTxns]           = useState([])
   const [draftReceipts, setDraftReceipts] = useState([])
   const [closedReceipts, setClosedReceipts] = useState([])
@@ -849,7 +849,7 @@ export default function BankPage() {
         )}
 
         {/* ── Bank GL settings banner ── */}
-        {!loading && (() => {
+        {!loading && mode !== 'credit' && (() => {
           const missing = [...new Set(bankTxns.filter(t => !t.bank_gl && t.CASHNAME && t.account_type !== 'credit').map(t => t.CASHNAME))]
           if (!missing.length) return null
           return (
@@ -872,7 +872,7 @@ export default function BankPage() {
         })()}
 
         {/* ── Bank GL settings panel ── */}
-        {showBankGlSettings && !loading && (() => {
+        {showBankGlSettings && !loading && mode !== 'credit' && (() => {
           const rows = [...new Map(bankTxns.filter(t => t.CASHNAME && t.account_type !== 'credit').map(t => [t.CASHNAME, t])).values()]
           return (
             <div style={{ background: '#fff', border: '1px solid #e5e9f0', borderRadius: 12,
@@ -1039,30 +1039,14 @@ export default function BankPage() {
                 <h2 style={{cursor:'pointer', userSelect:'none', display:'flex', alignItems:'center', gap:8}} onClick={() => setUnmatchedOpen(o => !o)}>
                   <span style={{fontSize:11, color:'#9ca3af', fontWeight:400}}>{unmatchedOpen ? '▼' : '▶'}</span>
                   תנועות שטרם נרשמו
-                  <span className="receipts-tab-badge" style={{background:'#3b82f6', color:'#fff', marginRight:4}}>{bankOnly.length + creditOnly.length}</span>
+                  <span className="receipts-tab-badge" style={{background:'#3b82f6', color:'#fff', marginRight:4}}>
+                    {mode === 'credit' ? creditOnly.length : bankOnly.length}
+                  </span>
                 </h2>
-                {unmatchedOpen && <>
-                  <div className="receipts-tabs">
-                    <button
-                      className={`receipts-tab${activeTab === 'bank' ? ' receipts-tab-active' : ''}`}
-                      onClick={() => setActiveTab('bank')}
-                    >
-                      תנועות בנק
-                      <span className="receipts-tab-badge">{bankOnly.length}</span>
-                    </button>
-                    <button
-                      className={`receipts-tab${activeTab === 'credit' ? ' receipts-tab-active receipts-tab-active-credit' : ''}`}
-                      onClick={() => setActiveTab('credit')}
-                    >
-                      תנועות אשראי
-                      <span className="receipts-tab-badge">{creditOnly.length}</span>
-                    </button>
-                  </div>
-                  {sharedControls}
-                </>}
+                {unmatchedOpen && sharedControls}
               </div>
 
-              {unmatchedOpen && activeTab === 'bank' && (
+              {unmatchedOpen && mode === 'bank' && (
                 bankOnly.length === 0 ? (
                   <p className="receipts-empty">אין תנועות בנק פתוחות בתקופה זו</p>
                 ) : (
@@ -1086,7 +1070,7 @@ export default function BankPage() {
                 )
               )}
 
-              {unmatchedOpen && activeTab === 'credit' && (
+              {unmatchedOpen && mode === 'credit' && (
                 creditOnly.length === 0 ? (
                   <p className="receipts-empty">אין תנועות אשראי פתוחות בתקופה זו</p>
                 ) : (
@@ -1112,7 +1096,7 @@ export default function BankPage() {
             </section>
 
             {/* ── Section 2: טיוטות ── */}
-            {(() => {
+            {mode === 'credit' ? null : (() => {
               const nonFinalActions = doneActions.filter(it => it.priority_fncnum && !it.is_final)
               const closedDrafts = closedReceipts.filter(r => !(r.doc_type === 'invoice_receipt' ? r.final_ivnum : r.rc_ivnum))
               const total = draftReceipts.length + closedDrafts.length + nonFinalActions.length
@@ -1332,7 +1316,7 @@ export default function BankPage() {
             })()}
 
             {/* ── Section 3: פקודות סופיות ── */}
-            {(() => {
+            {mode === 'credit' ? null : (() => {
               const finalActions = doneActions.filter(it => it.priority_fncnum && it.is_final)
               const closedFinal = closedReceipts.filter(r => r.doc_type === 'invoice_receipt' ? r.final_ivnum : r.rc_ivnum)
               const total = closedFinal.length + finalActions.length
@@ -1516,6 +1500,7 @@ export default function BankPage() {
           )
         })()}
       </div>
+
 
       {/* ── Receipt Modal ── */}
       {receiptModal && (

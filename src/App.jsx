@@ -6,8 +6,9 @@ import TactIcon from './tact/TactIcon'
 import './tact/tact-header.css'
 
 const NAV = [
-  { key: 'bank', label: 'תנועות בנק', icon: 'swap' },
-  { key: 'recs', label: 'מאגר המלצות', icon: 'database' },
+  { key: 'bank',   label: 'תנועות בנק',   icon: 'swap'       },
+  { key: 'credit', label: 'תנועות אשראי', icon: 'creditcard' },
+  { key: 'recs',   label: 'מאגר המלצות',  icon: 'database'   },
 ]
 
 export default function App() {
@@ -25,7 +26,9 @@ export default function App() {
           ))}
         </nav>
       </div>
-      {view === 'bank' ? <BankPage /> : <RecommendationsPage />}
+      {view === 'bank'   && <BankPage mode="bank" />}
+      {view === 'credit' && <BankPage mode="credit" />}
+      {view === 'recs'   && <RecommendationsPage />}
     </div>
   )
 }
