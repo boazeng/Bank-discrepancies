@@ -2,15 +2,14 @@
 /**
  * Close a Priority receipt draft using the Web SDK (CLOSETIV procedure).
  *
- * CLOSETIV expects one input: the internal numeric IV (not the IVNUM string).
  * Flow:
- *  1. Fetch IV from Priority OData REST API by IVNUM
- *  2. Login via Web SDK (WCF service)
- *  3. procStart('CLOSETIV') → inputFields step
- *  4. Provide IV → procedure runs → receipt closed + journal entry created
+ *  1. Fetch internal IV number from Priority OData by IVNUM
+ *  2. Login via Web SDK
+ *  3. procStart('CLOSETIV') → loop over steps until 'end'
+ *  4. After close: fetch final RC ivnum + journal FNCNUM
  *
- * Usage: node close_receipt.js <IVNUM>   e.g.  node close_receipt.js T12344
- * Output: JSON to stdout — { ok: true, ivnum, iv } or { ok: false, error }
+ * Usage: node close_receipt.js <IVNUM>
+ * Output (stdout): { ok: true, ivnum, iv, fncnum, rc_ivnum } or { ok: false, error }
  */
 const path = require('path');
 require('dotenv').config({ path: path.join(__dirname, '../../.env') });
@@ -24,13 +23,14 @@ function parseOdataUrl(odataUrl) {
   return { odataBase: url, serviceUrl: base + '/wcf/service.svc', tabulaini, company };
 }
 
-async function fetchIV(odataBase, ivnum) {
+function basicAuth() {
   const user = process.env.PRIORITY_USERNAME;
   const pass = process.env.PRIORITY_PASSWORD;
-  const auth = 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+  return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
+}
 
-  // Try key-based lookup first (draft receipts: IVTYPE='T', DEBIT='D')
-  // If that returns 404, fall back to filter-based search (handles already-closed or re-keyed receipts)
+async function fetchIV(odataBase, ivnum) {
+  const auth = basicAuth();
   const keyUrl = `${odataBase}/TINVOICES(IVNUM='${ivnum}',IVTYPE='T',DEBIT='D')?$select=IV,IVNUM,FINAL,TOTPRICE,STATDES`;
   const keyResp = await fetch(keyUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
 
@@ -38,54 +38,130 @@ async function fetchIV(odataBase, ivnum) {
   if (keyResp.ok) {
     data = await keyResp.json();
   } else {
-    // Fall back: search by IVNUM without assuming IVTYPE/DEBIT
     const filterUrl = `${odataBase}/TINVOICES?$filter=IVNUM eq '${ivnum}'&$select=IV,IVNUM,FINAL,TOTPRICE,STATDES,IVTYPE,DEBIT&$top=1`;
     const filterResp = await fetch(filterUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
-    if (!filterResp.ok) throw new Error(`קבלה ${ivnum} לא נמצאה בפריוריטי (HTTP ${filterResp.status}). ייתכן שבוטלה — מחק אותה ממערכת TACT.`);
-    const filterData = await filterResp.json();
-    const items = filterData.value || [];
-    if (!items.length) throw new Error(`קבלה ${ivnum} לא קיימת בפריוריטי. ייתכן שבוטלה — מחק אותה ממערכת TACT.`);
+    if (!filterResp.ok) throw new Error(`קבלה ${ivnum} לא נמצאה בפריוריטי (HTTP ${filterResp.status})`);
+    const items = (await filterResp.json()).value || [];
+    if (!items.length) throw new Error(`קבלה ${ivnum} לא קיימת בפריוריטי`);
     data = items[0];
   }
 
-  if (!data.IV) throw new Error(`שדה IV לא נמצא עבור ${ivnum} — האם זו טיוטת קבלה תקינה?`);
+  if (!data.IV) throw new Error(`שדה IV לא נמצא עבור ${ivnum}`);
   return { iv: data.IV, final: data.FINAL, status: data.STATDES, total: data.TOTPRICE };
 }
 
 function withTimeout(promise, ms, label) {
-  const t = new Promise((_, reject) => setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms));
+  const t = new Promise((_, reject) =>
+    setTimeout(() => reject(new Error(`${label} timed out after ${ms}ms`)), ms)
+  );
   return Promise.race([promise, t]);
 }
 
-async function handleStep(step, iv, ivnum) {
-  if (!step) return;
-  const type = step.type;
-  process.stderr.write(`Step: type=${type} message=${step.message || ''}\n`);
+async function runClosetiv(iv, ivnum, company) {
+  process.stderr.write('procStart CLOSETIV...\n');
+  let pd = await withTimeout(priority.procStart('CLOSETIV', 'P', null, company), 30000, 'procStart');
 
-  if (type === 'inputFields') {
-    // Provide the internal IV as the answer to field 1
-    // Format: { EditFields: [{ field: <fieldId>, value: <string> }] }
-    process.stderr.write(`Providing IV=${iv} to CLOSETIV...\n`);
-    const inputData = { EditFields: [{ field: 1, value: String(iv) }] };
-    const next = await withTimeout(step.proc.inputFields(1, inputData), 30000, 'proc.inputFields');
-    return handleStep(next, iv, ivnum);
+  for (let i = 0; i < 50; i++) {
+    process.stderr.write(`Step ${i}: type=${pd.type} message=${pd.message || ''}\n`);
+
+    switch (pd.type) {
+
+      case 'inputFields': {
+        // CLOSETIV expects the internal IV number in field 1
+        const fields = pd.input.EditFields.map(f => ({
+          field:  f.field,
+          op:     0,
+          value:  f.field === 1 ? String(iv) : (f.value || ''),
+          op2:    0,
+          value2: '',
+        }));
+        process.stderr.write(`inputFields: providing IV=${iv}\n`);
+        pd = await withTimeout(pd.proc.inputFields(1, { EditFields: fields }), 30000, 'inputFields');
+        break;
+      }
+
+      case 'choose': {
+        process.stderr.write(`choose: ${JSON.stringify(pd.Choose)}\n`);
+        pd = await withTimeout(pd.proc.choose(1, pd.Choose[0].key), 30000, 'choose');
+        break;
+      }
+
+      case 'message': {
+        process.stderr.write(`message: ${pd.message}\n`);
+        pd = await withTimeout(pd.proc.message(1), 30000, 'message');
+        break;
+      }
+
+      case 'client': {
+        pd = await withTimeout(pd.proc.continueProc(), 30000, 'continueProc');
+        break;
+      }
+
+      case 'documentOptions': {
+        pd = await withTimeout(pd.proc.documentOptions(1, pd.formats[0].format, 1), 30000, 'documentOptions');
+        break;
+      }
+
+      case 'reportOptions': {
+        pd = await withTimeout(pd.proc.reportOptions(1, pd.formats[0].format), 30000, 'reportOptions');
+        break;
+      }
+
+      case 'displayUrl': {
+        // CLOSETIV shouldn't produce a document, but handle gracefully
+        process.stderr.write('displayUrl (unexpected for CLOSETIV) — continuing\n');
+        return;
+      }
+
+      case 'end':
+      case 'finished': {
+        process.stderr.write('CLOSETIV completed\n');
+        return;
+      }
+
+      default: {
+        process.stderr.write(`Unknown step "${pd.type}" — trying continueProc\n`);
+        if (pd.proc && pd.proc.continueProc) {
+          pd = await withTimeout(pd.proc.continueProc(), 30000, 'continueProc');
+        } else {
+          throw new Error('Unhandled procedure step: ' + pd.type);
+        }
+      }
+    }
   }
-  if (type === 'message') {
-    process.stderr.write(`Confirming message: ${step.message}\n`);
-    const next = await withTimeout(step.proc.message(1), 30000, 'proc.message');
-    return handleStep(next, iv, ivnum);
+
+  throw new Error('CLOSETIV: too many steps (> 50)');
+}
+
+async function fetchPostClose(odataBase, ivnum) {
+  const auth = basicAuth();
+  await new Promise(r => setTimeout(r, 1500));  // give Priority time to commit
+
+  let fncnum = null;
+  let rcIvnum = null;
+
+  try {
+    const draftUrl = `${odataBase}/TINVOICES?$filter=IVNUM eq '${ivnum}'&$select=IVNUM,FNCNUM,FINAL&$top=1`;
+    const dr = await fetch(draftUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
+    if (dr.ok) {
+      const draft = ((await dr.json()).value || [])[0];
+      if (draft) fncnum = draft.FNCNUM || null;
+    }
+
+    if (fncnum) {
+      const rcUrl = `${odataBase}/TINVOICES?$filter=FNCNUM eq '${fncnum}' and FINAL eq 'Y'&$select=IVNUM,FNCNUM&$top=5`;
+      const rr = await fetch(rcUrl, { headers: { Authorization: auth, Accept: 'application/json' } });
+      if (rr.ok) {
+        const items = ((await rr.json()).value || []).filter(x => x.IVNUM !== ivnum);
+        if (items.length) rcIvnum = items[0].IVNUM;
+      }
+    }
+  } catch (e) {
+    process.stderr.write(`Post-close fetch failed (non-fatal): ${e.message}\n`);
   }
-  if (type === 'end' || type === 'finished') {
-    process.stderr.write('Procedure finished successfully\n');
-    return;
-  }
-  // Any other step — try to continue
-  process.stderr.write(`Unhandled step type "${type}" — attempting continueProc\n`);
-  if (step.proc && step.proc.continueProc) {
-    const next = await withTimeout(step.proc.continueProc(), 30000, 'proc.continueProc');
-    return handleStep(next, iv, ivnum);
-  }
-  throw new Error(`Unhandled procedure step: ${type}`);
+
+  process.stderr.write(`Post-close: fncnum=${fncnum} rc=${rcIvnum}\n`);
+  return { fncnum, rcIvnum };
 }
 
 async function main() {
@@ -95,13 +171,11 @@ async function main() {
   const odataUrl = process.env.PRIORITY_URL_REAL || process.env.PRIORITY_URL || '';
   const { odataBase, serviceUrl, tabulaini, company } = parseOdataUrl(odataUrl);
 
-  // Step 1: Get internal IV from OData
   process.stderr.write(`Fetching IV for ${ivnum}...\n`);
   const { iv, final, status, total } = await fetchIV(odataBase, ivnum);
   process.stderr.write(`IV=${iv} | FINAL=${final || 'draft'} | STATUS=${status} | TOTAL=${total}\n`);
   if (final === 'Y') throw new Error(`Receipt ${ivnum} is already final (FINAL=Y)`);
 
-  // Step 2: Login via Web SDK
   process.stderr.write(`Login → ${serviceUrl} (${company})\n`);
   await priority.login({
     username:  process.env.PRIORITY_USERNAME,
@@ -113,43 +187,9 @@ async function main() {
   });
   process.stderr.write('Login OK\n');
 
-  // Step 3: Start CLOSETIV and handle steps
-  process.stderr.write('procStart CLOSETIV...\n');
-  const firstStep = await withTimeout(priority.procStart('CLOSETIV', 'P', null, company), 30000, 'procStart');
-  await handleStep(firstStep, iv, ivnum);
-  process.stderr.write('CLOSETIV completed\n');
+  await runClosetiv(iv, ivnum, company);
 
-  // After CLOSETIV, fetch updated receipt data — get FNCNUM (journal entry) and RC number
-  let rcIvnum = null;
-  let fncnum = null;
-  try {
-    const auth2 = 'Basic ' + Buffer.from(`${process.env.PRIORITY_USERNAME}:${process.env.PRIORITY_PASSWORD}`).toString('base64');
-    // Give Priority a moment to commit the journal entry
-    await new Promise(r => setTimeout(r, 1500));
-
-    // 1. Re-fetch the original draft to get its FNCNUM
-    const draftUrl = `${odataBase}/TINVOICES?$filter=IVNUM eq '${ivnum}'&$select=IVNUM,FNCNUM,FINAL,STATDES&$top=1`;
-    const dr = await fetch(draftUrl, { headers: { Authorization: auth2, Accept: 'application/json' } });
-    if (dr.ok) {
-      const draftData = await dr.json();
-      const draft = (draftData.value || [])[0];
-      if (draft) fncnum = draft.FNCNUM || null;
-    }
-
-    // 2. If we have FNCNUM, find the RC receipt with the same journal entry
-    if (fncnum) {
-      const rcUrl = `${odataBase}/TINVOICES?$filter=FNCNUM eq '${fncnum}' and FINAL eq 'Y'&$select=IVNUM,FNCNUM,FINAL,STATDES&$top=5`;
-      const rr = await fetch(rcUrl, { headers: { Authorization: auth2, Accept: 'application/json' } });
-      if (rr.ok) {
-        const rcData = await rr.json();
-        const items = (rcData.value || []).filter(x => x.IVNUM !== ivnum);
-        if (items.length) rcIvnum = items[0].IVNUM;
-      }
-    }
-    process.stderr.write(`Post-close: fncnum=${fncnum} rc=${rcIvnum}\n`);
-  } catch (e) {
-    process.stderr.write(`Post-close fetch failed (non-fatal): ${e.message}\n`);
-  }
+  const { fncnum, rcIvnum } = await fetchPostClose(odataBase, ivnum);
 
   process.stdout.write(JSON.stringify({ ok: true, ivnum, iv, fncnum, rc_ivnum: rcIvnum }));
 }
