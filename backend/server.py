@@ -356,6 +356,42 @@ def receipts_bank_transactions():
         except Exception as _ce:
             logger.warning(f"CASH_BANKS GL lookup failed: {_ce}")
 
+        # ── Load CASH_CREDITCARDS — authoritative credit-card list ────────────
+        # Maps CASHNAME → last-4 digits (for display).  Cards found here are
+        # always typed as "credit" regardless of their CASHNAME format.
+        credit_card_set: set = set()   # CASHNAMEs that are credit cards
+        credit_last4_map: dict = {}    # CASHNAME → last-4 string
+
+        def _extract_last4(cashname: str, cashdes: str = "") -> str:
+            """Best-effort extraction of 4-digit card suffix."""
+            import re
+            parts = cashname.split("-")
+            if len(parts) >= 2:
+                last = parts[-1]
+                if len(last) == 4 and last.isdigit():
+                    return last
+            # fall back to last 4-digit group in description
+            groups = re.findall(r'\b(\d{4})\b', cashdes or "")
+            return groups[-1] if groups else ""
+
+        try:
+            r_cc = http_requests.get(
+                f"{_prio_url()}/CASH_CREDITCARDS?$select=CASHNAME,CASHDES,ACCNAME",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+            )
+            if r_cc.status_code == 200:
+                for cc_rec in r_cc.json().get("value", []):
+                    cn  = (cc_rec.get("CASHNAME") or "").strip()
+                    des = (cc_rec.get("CASHDES")  or "").strip()
+                    gl  = (cc_rec.get("ACCNAME")  or "").strip()
+                    if cn:
+                        credit_card_set.add(cn)
+                        credit_last4_map[cn] = _extract_last4(cn, des)
+                        if gl:
+                            cash_gl_map.setdefault(cn, gl)
+        except Exception as _cce:
+            logger.warning(f"CASH_CREDITCARDS lookup failed: {_cce}")
+
         valid_bank_cn = set(cash_gl_map.keys())
 
         processed_ids = _load_processed_txns()
@@ -415,7 +451,14 @@ def receipts_bank_transactions():
                 "KLINE":            kl,
                 "REF":              line.get("REF") or "",
                 "bank_gl":          cash_gl_map.get(cashname, ""),
-                "account_type":     "bank" if len(cashname.split("-")) == 2 else "credit",
+                "account_type":     "credit" if (
+                    cashname in credit_card_set or len(cashname.split("-")) != 2
+                ) else "bank",
+                "card_last4":       credit_last4_map.get(cashname) or (
+                    _extract_last4(cashname) if (
+                        cashname in credit_card_set or len(cashname.split("-")) != 2
+                    ) else ""
+                ),
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,

@@ -850,7 +850,7 @@ export default function BankPage() {
 
         {/* ── Bank GL settings banner ── */}
         {!loading && (() => {
-          const missing = [...new Set(bankTxns.filter(t => !t.bank_gl && t.CASHNAME).map(t => t.CASHNAME))]
+          const missing = [...new Set(bankTxns.filter(t => !t.bank_gl && t.CASHNAME && t.account_type !== 'credit').map(t => t.CASHNAME))]
           if (!missing.length) return null
           return (
             <div style={{ background: '#fffbeb', border: '1px solid #f59e0b', borderRadius: 10,
@@ -873,7 +873,7 @@ export default function BankPage() {
 
         {/* ── Bank GL settings panel ── */}
         {showBankGlSettings && !loading && (() => {
-          const rows = [...new Map(bankTxns.filter(t => t.CASHNAME).map(t => [t.CASHNAME, t])).values()]
+          const rows = [...new Map(bankTxns.filter(t => t.CASHNAME && t.account_type !== 'credit').map(t => [t.CASHNAME, t])).values()]
           return (
             <div style={{ background: '#fff', border: '1px solid #e5e9f0', borderRadius: 12,
               padding: '20px 24px', marginBottom: 24 }}>
@@ -980,7 +980,7 @@ export default function BankPage() {
             </>
           )
 
-          const txnRows = (txns) => txns.map(txn => {
+          const txnRows = (txns, isCredit = false) => txns.map(txn => {
             const chosen = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
             const s = ACTION_STYLES[chosen] || ACTION_STYLES.journal
             const busy = actioning === txn.FNCNUM
@@ -989,7 +989,14 @@ export default function BankPage() {
                 <td>{fmt(txn.CURDATE)}</td>
                 <td>{txn.DETAILS}</td>
                 <td><AmountCell sum1={txn.SUM1} direction={txn.direction} /></td>
-                <td className="receipts-small" title={txn.bank_code}>{txn.bank_desc || txn.bank_code}</td>
+                <td className="receipts-small" title={txn.bank_code}>
+                  {txn.bank_desc || txn.bank_code}
+                  {isCredit && txn.card_last4 && (
+                    <span style={{ fontFamily: 'monospace', color: '#6b7280', fontSize: 11, marginRight: 5 }}>
+                      ····{txn.card_last4}
+                    </span>
+                  )}
+                </td>
                 <td>{txn.BRANCHNAME}</td>
                 <td>
                   <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
@@ -1096,7 +1103,7 @@ export default function BankPage() {
                         </tr>
                       </thead>
                       <tbody>
-                        {txnRows(creditOnly)}
+                        {txnRows(creditOnly, true)}
                       </tbody>
                     </table>
                   </div>
