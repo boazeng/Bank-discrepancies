@@ -984,17 +984,29 @@ def _detect_bank_gl(cashname, branchname, bank_name_hint=""):
 
 def _find_node():
     """Return path to node executable, works on Windows and Linux."""
-    import shutil
-    found = shutil.which("node")
-    if found and os.path.isfile(found):
-        return found
+    import shutil, glob as _glob
+    for exe_name in ("node", "nodejs"):
+        found = shutil.which(exe_name)
+        if found and os.path.isfile(found):
+            return found
     candidates = [
         r"C:\Program Files\nodejs\node.exe",
         r"C:\Program Files (x86)\nodejs\node.exe",
         "/usr/bin/node",
+        "/usr/bin/nodejs",
         "/usr/local/bin/node",
+        "/usr/local/bin/nodejs",
         "/usr/local/nvm/versions/node/current/bin/node",
     ]
+    # nvm installed under any home directory or /root
+    nvm_patterns = [
+        "/root/.nvm/versions/node/*/bin/node",
+        "/home/*/.nvm/versions/node/*/bin/node",
+    ]
+    for pattern in nvm_patterns:
+        matches = sorted(_glob.glob(pattern))
+        if matches:
+            return matches[-1]  # pick highest version
     for c in candidates:
         if os.path.isfile(c):
             return c
@@ -1008,6 +1020,7 @@ def _node_run(script_dir, args, timeout=90):
     """subprocess.run for a node script — handles spaces in node path on Windows."""
     import subprocess
     node_exe = _find_node()
+    logger.info(f"node executable: {node_exe}")
     # On Windows, paths with spaces need quoting when building a cmd string
     def _q(s):
         return f'"{s}"' if " " in s else s
