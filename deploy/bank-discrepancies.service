@@ -10,7 +10,7 @@ WorkingDirectory=/home/ec2-user/Bank-discrepancies
 # Real secrets live OUTSIDE the repo, in a central env folder (chmod 600).
 # The app reads this path first (see backend/server.py env resolution).
 Environment=BANK_ENV_FILE=/home/ec2-user/env/.env
-Environment=PATH=/home/ec2-user/Bank-discrepancies/.venv/bin:/usr/bin
+Environment=PATH=/home/ec2-user/Bank-discrepancies/.venv/bin:/usr/local/bin:/usr/bin:/bin
 
 # gunicorn serves the Flask app object `app` from backend/server.py.
 # Bind to localhost only — nginx is the public-facing reverse proxy.

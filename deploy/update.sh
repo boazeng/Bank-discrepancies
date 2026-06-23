@@ -8,6 +8,9 @@ echo "== Updating Bank Discrepancies =="
 git pull --ff-only
 ./.venv/bin/pip install -q -r requirements.txt
 (cd backend/close_receipt && npm install --omit=dev --silent)
+echo "-- node: $(which node nodejs 2>/dev/null | head -1 || echo 'NOT FOUND')"
+sudo cp deploy/bank-discrepancies.service /etc/systemd/system/bank-discrepancies.service
+sudo systemctl daemon-reload
 sudo systemctl restart bank-discrepancies
 sleep 2
 sudo systemctl --no-pager status bank-discrepancies | head -n 12
