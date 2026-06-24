@@ -1193,15 +1193,33 @@ def bank_line_create_transfer():
         if not details:
             details = "תשלום"
 
+        wtax_percent = 0
+        try:
+            acc_safe = accname.replace("'", "")
+            fncsup_resp = http_requests.get(
+                f"{_prio_url()}/FNCSUP?$filter=ACCNAME eq '{acc_safe}'&$select=WTAXPERCENT&$top=1",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=10, verify=False,
+            )
+            if fncsup_resp.ok:
+                fncsup_rows = fncsup_resp.json().get("value", [])
+                if fncsup_rows:
+                    wtax_percent = fncsup_rows[0].get("WTAXPERCENT") or 0
+        except Exception as wtax_err:
+            logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
+
+        wtax_amount = round(amount * wtax_percent / 100, 2) if wtax_percent else 0
+
         payload = {
-            "ACCNAME":    accname,
-            "IVDATE":     ivdate,
-            "PAYDATE":    ivdate,
-            "BRANCHNAME": branchname,
-            "CASHNAME":   cashname,
-            "DETAILS":    details,
-            "QPRICE":     amount,
+            "ACCNAME":      accname,
+            "IVDATE":       ivdate,
+            "PAYDATE":      ivdate,
+            "BRANCHNAME":   branchname,
+            "CASHNAME":     cashname,
+            "DETAILS":      details,
+            "QPRICE":       amount,
             "FNCITEMSFLAG": "Y",
+            "WTAXPERCENT":  wtax_percent,
+            "WTAX":         wtax_amount,
         }
         logger.info(f"bank_line_create_transfer QINVOICES payload: {payload}")
 
