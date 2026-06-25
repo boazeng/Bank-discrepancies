@@ -48,6 +48,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [refreshingFinal, setRefreshingFinal] = useState(null)
   const [actioning, setActioning] = useState(null)
   const [rowActions, setRowActions] = useState({})
+  const [quickConfirming, setQuickConfirming] = useState(null)
 
   const [activeTab, setActiveTab]     = useState('bank')
   const [unmatchedOpen, setUnmatchedOpen] = useState(false)
@@ -669,6 +670,39 @@ export default function BankPage({ mode = 'bank' }) {
     }
   }
 
+  async function quickConfirm(txn) {
+    setQuickConfirming(txn.FNCNUM)
+    try {
+      const resp = await fetch(`${API}/api/receipts/bank-line/quick-confirm`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txn_id:     txn.FNCNUM,
+          amount:     txn.SUM1,
+          direction:  txn.direction,
+          cashname:   txn.CASHNAME,
+          branchname: txn.BRANCHNAME,
+          ivdate:     (txn.CURDATE || '').slice(0, 10),
+          details:    txn.DETAILS,
+          bank_gl:    txn.bank_gl || '',
+          pattern:    txn.auto_match,
+        }),
+      })
+      const data = await resp.json()
+      if (!data.ok) throw new Error(
+        data.detail?.FORM?.InterfaceErrors?.text ||
+        data.detail?.error?.message?.value ||
+        data.detail?.error?.message ||
+        data.error || 'שגיאה'
+      )
+      await loadAll()
+    } catch (e) {
+      alert('שגיאה באישור מהיר: ' + e.message)
+    } finally {
+      setQuickConfirming(null)
+    }
+  }
+
   function openTransferModal(txn) {
     setTransferModal(txn)
     setTransferAccname('')
@@ -981,13 +1015,23 @@ export default function BankPage({ mode = 'bank' }) {
           )
 
           const txnRows = (txns, isCredit = false) => txns.map(txn => {
-            const chosen = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
-            const s = ACTION_STYLES[chosen] || ACTION_STYLES.journal
-            const busy = actioning === txn.FNCNUM
+            const match   = txn.auto_match
+            const chosen  = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
+            const s       = ACTION_STYLES[chosen] || ACTION_STYLES.journal
+            const busy    = actioning === txn.FNCNUM
+            const qBusy   = quickConfirming === txn.FNCNUM
+            const mStyle  = match ? ACTION_STYLES[match.action] || ACTION_STYLES.journal : null
             return (
-              <tr key={txn.FNCNUM}>
+              <tr key={txn.FNCNUM} style={match ? { background: '#f0fdf4' } : {}}>
                 <td>{fmt(txn.CURDATE)}</td>
-                <td>{txn.DETAILS}</td>
+                <td>
+                  <div>{txn.DETAILS}</div>
+                  {match && (
+                    <div style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
+                      {mStyle?.label} ← <strong>{match.accdes || match.accname}</strong>
+                    </div>
+                  )}
+                </td>
                 <td><AmountCell sum1={txn.SUM1} direction={txn.direction} /></td>
                 <td className="receipts-small" title={txn.bank_code}>
                   {txn.bank_desc || txn.bank_code}
@@ -999,33 +1043,64 @@ export default function BankPage({ mode = 'bank' }) {
                 </td>
                 <td>{txn.BRANCHNAME}</td>
                 <td>
-                  <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
-                    <select
-                      className="receipts-action-select"
-                      style={{ minWidth: 170, color: s.color, borderColor: s.color + '88' }}
-                      value={chosen}
-                      onChange={e => setRowActions(prev => ({ ...prev, [txn.FNCNUM]: e.target.value }))}
-                    >
-                      <option value="receipt">הפקת קבלה</option>
-                      <option value="invoice_receipt">חשבונית מס קבלה</option>
-                      <option value="journal">רישום פקודת יומן</option>
-                      <option value="transfer">הפקת העברה בנקאית</option>
-                    </select>
-                    <button
-                      className="receipts-action-btn"
-                      style={{ color: s.color, background: s.bg, borderColor: s.color + '88', whiteSpace: 'nowrap' }}
-                      disabled={busy}
-                      onClick={() => {
-                        if (chosen === 'receipt') openReceiptModal(txn, 'receipt')
-                        else if (chosen === 'invoice_receipt') openInvoiceReceiptModal(txn)
-                        else if (chosen === 'journal') openJournalModal(txn)
-                        else if (chosen === 'transfer') openTransferModal(txn)
-                        else { setActioning(txn.FNCNUM); recordAction(txn, chosen) }
-                      }}
-                    >
-                      {busy ? '...' : '← בצע'}
-                    </button>
-                  </div>
+                  {match ? (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <button
+                        style={{
+                          background: '#16a34a', color: '#fff', border: 'none',
+                          borderRadius: 6, padding: '5px 14px', cursor: qBusy ? 'default' : 'pointer',
+                          fontWeight: 700, fontSize: 13, whiteSpace: 'nowrap',
+                          opacity: qBusy ? 0.6 : 1,
+                        }}
+                        disabled={qBusy}
+                        onClick={() => quickConfirm(txn)}
+                      >
+                        {qBusy ? '...' : '✓ אשר'}
+                      </button>
+                      <button
+                        style={{
+                          background: 'none', border: '1px solid #d1d5db', borderRadius: 6,
+                          padding: '5px 10px', cursor: 'pointer', fontSize: 12, color: '#6b7280',
+                        }}
+                        onClick={() => {
+                          if (chosen === 'receipt') openReceiptModal(txn, 'receipt')
+                          else if (chosen === 'invoice_receipt') openInvoiceReceiptModal(txn)
+                          else if (chosen === 'journal') openJournalModal(txn)
+                          else openTransferModal(txn)
+                        }}
+                      >
+                        ✎ ערוך
+                      </button>
+                    </div>
+                  ) : (
+                    <div style={{ display: 'flex', gap: 6, alignItems: 'center' }}>
+                      <select
+                        className="receipts-action-select"
+                        style={{ minWidth: 170, color: s.color, borderColor: s.color + '88' }}
+                        value={chosen}
+                        onChange={e => setRowActions(prev => ({ ...prev, [txn.FNCNUM]: e.target.value }))}
+                      >
+                        <option value="receipt">הפקת קבלה</option>
+                        <option value="invoice_receipt">חשבונית מס קבלה</option>
+                        <option value="journal">רישום פקודת יומן</option>
+                        <option value="transfer">הפקת העברה בנקאית</option>
+                      </select>
+                      <button
+                        className="receipts-action-btn"
+                        style={{ color: s.color, background: s.bg, borderColor: s.color + '88', whiteSpace: 'nowrap' }}
+                        disabled={busy}
+                        onClick={() => {
+                          if (chosen === 'receipt') openReceiptModal(txn, 'receipt')
+                          else if (chosen === 'invoice_receipt') openInvoiceReceiptModal(txn)
+                          else if (chosen === 'journal') openJournalModal(txn)
+                          else if (chosen === 'transfer') openTransferModal(txn)
+                          else { setActioning(txn.FNCNUM); recordAction(txn, chosen) }
+                        }}
+                      >
+                        {busy ? '...' : '← בצע'}
+                      </button>
+                    </div>
+                  )}
                 </td>
               </tr>
             )

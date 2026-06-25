@@ -154,6 +154,18 @@ except Exception as _jt_db_err:
     logger.error(f"journal_templates_db load FAILED: {_jt_db_err}")
     journal_templates_db = None
 
+# Load transaction-patterns database module
+try:
+    tp_db_path = PROJECT_ROOT / "database" / "receipts" / "transaction_patterns_db.py"
+    spec_tp_db = importlib.util.spec_from_file_location("transaction_patterns_db", tp_db_path)
+    transaction_patterns_db = importlib.util.module_from_spec(spec_tp_db)
+    sys.modules["transaction_patterns_db"] = transaction_patterns_db
+    spec_tp_db.loader.exec_module(transaction_patterns_db)
+    logger.info(f"transaction_patterns_db loaded from {tp_db_path}")
+except Exception as _tp_db_err:
+    logger.error(f"transaction_patterns_db load FAILED: {_tp_db_err}")
+    transaction_patterns_db = None
+
 # Load journal-recommendations database module (SQLite + FTS5)
 try:
     rec_db_path = PROJECT_ROOT / "database" / "receipts" / "recommendations_db.py"
@@ -459,6 +471,11 @@ def receipts_bank_transactions():
                         cashname in credit_card_set or len(cashname.split("-")) != 2
                     ) else ""
                 ),
+                "auto_match":       (
+                    transaction_patterns_db.find_pattern(
+                        line.get("DETAILS", ""), direction, cashname
+                    ) if transaction_patterns_db else None
+                ),
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
@@ -612,6 +629,16 @@ def bank_line_create_receipt():
         processed = _load_processed_txns()
         processed.add(txn_id)
         _save_processed_txns(processed)
+
+        if transaction_patterns_db:
+            try:
+                transaction_patterns_db.save_pattern(
+                    details=details, direction="+",
+                    action=doc_type, accname=accname, accdes=accdes,
+                    cashname=cashname, branchname=branchname,
+                )
+            except Exception as _pe:
+                logger.warning(f"save_pattern failed: {_pe}")
 
         _launch_bank_recon(priority_ivnum, cashname, txn_id, label="receipt")
 
@@ -1158,6 +1185,16 @@ def bank_line_create_journal():
         processed.add(txn_id)
         _save_processed_txns(processed)
 
+        if transaction_patterns_db:
+            try:
+                transaction_patterns_db.save_pattern(
+                    details=details, direction=direction,
+                    action="journal", accname=cp_acc, accdes=counterpart_desc,
+                    cashname=cashname, branchname=branchname,
+                )
+            except Exception as _pe:
+                logger.warning(f"save_pattern failed: {_pe}")
+
         _launch_bank_recon(fncnum, cashname, txn_id, label="journal")
 
         return jsonify({"ok": True, "fncnum": fncnum})
@@ -1169,6 +1206,61 @@ def bank_line_create_journal():
             detail = str(e)
         return jsonify({"ok": False, "error": str(e), "detail": detail}), 500
     except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/bank-line/quick-confirm", methods=["POST"])
+def bank_line_quick_confirm():
+    """Execute a bank-line action using a stored pattern — no modal needed.
+
+    Body: { txn_id, amount, direction, cashname, branchname, ivdate, details, bank_gl, pattern }
+    where `pattern` is the auto_match object returned with each bank transaction.
+    """
+    try:
+        data       = request.get_json(force=True) or {}
+        pattern    = data.get("pattern") or {}
+        action     = pattern.get("action", "journal")
+        txn_id     = str(data.get("txn_id", "")).strip()
+        amount     = float(data.get("amount", 0))
+        direction  = str(data.get("direction", "-")).strip()
+        cashname   = str(data.get("cashname", "")).strip()
+        branchname = str(data.get("branchname", "")).strip()
+        ivdate     = str(data.get("ivdate", ""))[:10]
+        details    = str(data.get("details", "")).strip()
+        bank_gl    = str(data.get("bank_gl", "")).strip()
+        accname    = pattern.get("accname", "")
+        accdes     = pattern.get("accdes", "")
+
+        if not txn_id or not accname or amount <= 0:
+            return jsonify({"ok": False, "error": "חסרים שדות חובה"}), 400
+
+        if action not in ("receipt", "invoice_receipt", "journal", "transfer"):
+            return jsonify({"ok": False, "error": f"סוג פעולה לא ידוע: {action}"}), 400
+
+        inner_payload = {
+            "txn_id": txn_id, "amount": amount, "direction": direction,
+            "cashname": cashname, "branchname": branchname, "ivdate": ivdate,
+            "details": details, "accname": accname, "accdes": accdes,
+            # journal extras
+            "counterpart_account": accname,
+            "counterpart_desc": accdes,
+            "bank_gl_account": bank_gl,
+            "save_template": True,
+            # receipt extras
+            "doc_type": action if action in ("receipt", "invoice_receipt") else "receipt",
+        }
+
+        with app.test_client() as tc:
+            inner = tc.post(
+                f"/api/receipts/bank-line/create-{action}",
+                json=inner_payload,
+            )
+            result = inner.get_json() or {}
+
+        return jsonify(result), inner.status_code
+
+    except Exception as e:
+        logger.error(f"quick_confirm error: {e}", exc_info=True)
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
@@ -1267,6 +1359,16 @@ def bank_line_create_transfer():
         processed = _load_processed_txns()
         processed.add(txn_id)
         _save_processed_txns(processed)
+
+        if transaction_patterns_db:
+            try:
+                transaction_patterns_db.save_pattern(
+                    details=details, direction=direction,
+                    action="transfer", accname=accname, accdes=result.get("CDES", ""),
+                    cashname=cashname, branchname=branchname,
+                )
+            except Exception as _pe:
+                logger.warning(f"save_pattern failed: {_pe}")
 
         _launch_bank_recon(ivnum, cashname, txn_id, label="transfer")
 
