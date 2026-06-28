@@ -1706,6 +1706,61 @@ def priority_suppliers_search():
         return jsonify({"ok": False, "error": str(e), "suppliers": []}), 500
 
 
+_all_suppliers_cache = {"data": None, "ts": 0}
+_all_customers_cache = {"data": None, "ts": 0}
+_ALL_CACHE_TTL = 600  # 10 minutes
+
+
+@app.route("/api/receipts/all-suppliers", methods=["GET"])
+def all_suppliers_list():
+    """Return all supplier accounts from FNCSUP for dropdown (cached 10 min)."""
+    import time
+    try:
+        now = time.time()
+        if _all_suppliers_cache["data"] is not None and (now - _all_suppliers_cache["ts"]) < _ALL_CACHE_TTL:
+            return jsonify({"ok": True, "accounts": _all_suppliers_cache["data"], "from_cache": True})
+        r = http_requests.get(
+            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES&$top=500",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+        )
+        r.raise_for_status()
+        accounts = [
+            {"accname": s["ACCNAME"], "accdes": s.get("SUPDES", "")}
+            for s in r.json().get("value", [])
+            if s.get("ACCNAME")
+        ]
+        _all_suppliers_cache["data"] = accounts
+        _all_suppliers_cache["ts"] = now
+        return jsonify({"ok": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "accounts": []}), 500
+
+
+@app.route("/api/receipts/all-customers", methods=["GET"])
+def all_customers_list():
+    """Return all customer accounts from CUSTOMERS for dropdown (cached 10 min)."""
+    import time
+    try:
+        now = time.time()
+        if _all_customers_cache["data"] is not None and (now - _all_customers_cache["ts"]) < _ALL_CACHE_TTL:
+            return jsonify({"ok": True, "accounts": _all_customers_cache["data"], "from_cache": True})
+        r = http_requests.get(
+            f"{_prio_url()}/CUSTOMERS?$select=CUSTNAME,CDES&$top=500",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+        )
+        r.raise_for_status()
+        accounts = [
+            {"accname": s["CUSTNAME"], "accdes": s.get("CDES", "")}
+            for s in r.json().get("value", [])
+            if s.get("CUSTNAME")
+        ]
+        _all_customers_cache["data"] = accounts
+        _all_customers_cache["ts"] = now
+        return jsonify({"ok": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "accounts": []}), 500
+
+
 @app.route("/api/receipts/bank-line/record-action", methods=["POST"])
 def bank_line_record_action():
     """Record a manual action (journal / transfer) for a bank line and mark it done immediately."""

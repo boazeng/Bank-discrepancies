@@ -130,6 +130,12 @@ export default function BankPage({ mode = 'bank' }) {
   const [transferSuccess, setTransferSuccess]           = useState('')
   const [transferAccSugg, setTransferAccSugg]           = useState([])
   const [transferAccSearching, setTransferAccSearching] = useState(false)
+  const [transferAccFocused, setTransferAccFocused]     = useState(false)
+
+  // Pre-loaded account lists for dropdowns
+  const [allSuppliers, setAllSuppliers] = useState([])
+  const [allCustomers, setAllCustomers] = useState([])
+  const [receiptAccFocused, setReceiptAccFocused] = useState(false)
 
   const loadAll = useCallback(async (d, b, refreshGl) => {
     const daysParam   = d ?? days
@@ -308,6 +314,8 @@ export default function BankPage({ mode = 'bank' }) {
     setOpenInvoices([])
     setSelectedInvoices(new Set())
     setExistingRc(null)
+    setReceiptAccFocused(false)
+    loadAllCustomers()
     if (txn.SUM1) {
       setCustSearching(true)
       try {
@@ -711,6 +719,8 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferError('')
     setTransferSuccess('')
     setTransferAccSugg([])
+    setTransferAccFocused(false)
+    loadAllSuppliers()
   }
 
   async function finalizeTransfer(ivnum) {
@@ -772,6 +782,22 @@ export default function BankPage({ mode = 'bank' }) {
       const res = await fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(q)}&branchname=${encodeURIComponent(branchname || '')}`).then(r => r.json())
       setTransferAccSugg((res.accounts || []).slice(0, 6))
     } catch { /* silent */ } finally { setTransferAccSearching(false) }
+  }
+
+  async function loadAllSuppliers() {
+    if (allSuppliers.length > 0) return
+    try {
+      const res = await fetch(`${API}/api/receipts/all-suppliers`).then(r => r.json())
+      if (res.ok) setAllSuppliers(res.accounts || [])
+    } catch { /* silent */ }
+  }
+
+  async function loadAllCustomers() {
+    if (allCustomers.length > 0) return
+    try {
+      const res = await fetch(`${API}/api/receipts/all-customers`).then(r => r.json())
+      if (res.ok) setAllCustomers(res.accounts || [])
+    } catch { /* silent */ }
   }
 
   async function submitTransfer() {
@@ -1651,23 +1677,16 @@ export default function BankPage({ mode = 'bank' }) {
               </div>
             )}
 
-            <div className="receipts-modal-field">
+            <div className="receipts-modal-field" style={{ position: 'relative' }}>
               <label>קוד לקוח בפריוריטי (ACCNAME) *</label>
               <input
                 type="text"
-                placeholder='לדוגמה: 50440 או שם לקוח'
+                placeholder={allCustomers.length > 0 ? 'חפש לפי קוד או שם לקוח...' : 'לדוגמה: 50440 או שם לקוח'}
                 value={modalAccname}
-                onChange={e => {
-                  const v = e.target.value
-                  setModalAccname(v)
-                  setModalAccdes('')
-                  setOpenInvoices([])
-                  setSelectedInvoices(new Set())
-                  searchAccounts(v, receiptModal?.BRANCHNAME)
-                }}
+                onFocus={() => setReceiptAccFocused(true)}
                 onBlur={e => {
+                  setTimeout(() => setReceiptAccFocused(false), 150)
                   const v = e.target.value.trim()
-                  setTimeout(() => setAccSuggestions([]), 200)
                   if (v.length >= 2) {
                     searchOpenInvoices(v, receiptModal)
                     if (!modalAccdes) {
@@ -1682,30 +1701,45 @@ export default function BankPage({ mode = 'bank' }) {
                     }
                   }
                 }}
+                onChange={e => {
+                  const v = e.target.value
+                  setModalAccname(v)
+                  setModalAccdes('')
+                  setOpenInvoices([])
+                  setSelectedInvoices(new Set())
+                }}
                 autoFocus={custSuggestions.length === 0}
               />
-              {accSearching && <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש...</p>}
-              {accSuggestions.length > 0 && (
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 180, overflowY: 'auto', zIndex: 10, position: 'relative' }}>
-                  {accSuggestions.map(a => (
-                    <button
-                      key={a.accname}
-                      onMouseDown={() => {
-                        setModalAccname(a.accname)
-                        setModalAccdes(a.accdes)
-                        setAccSuggestions([])
-                        searchOpenInvoices(a.accname, receiptModal)
-                      }}
-                      style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                        border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                        borderBottom: '1px solid #f3f4f6' }}
-                    >
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                      {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {receiptAccFocused && allCustomers.length > 0 && (() => {
+                const q = modalAccname.trim().toLowerCase()
+                const filtered = q.length === 0
+                  ? allCustomers.slice(0, 60)
+                  : allCustomers.filter(a =>
+                      a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q)
+                    ).slice(0, 60)
+                if (filtered.length === 0) return null
+                return (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                    {filtered.map(a => (
+                      <button
+                        key={a.accname}
+                        onMouseDown={() => {
+                          setModalAccname(a.accname)
+                          setModalAccdes(a.accdes || '')
+                          setReceiptAccFocused(false)
+                          searchOpenInvoices(a.accname, receiptModal)
+                        }}
+                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                          borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                        {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               {modalAccdes && (
                 <div style={{ marginTop: 4, fontSize: 13, color: '#15803d', fontWeight: 600 }}>
                   {modalAccdes}
@@ -2186,26 +2220,18 @@ export default function BankPage({ mode = 'bank' }) {
               </tbody>
             </table>
 
-            <div className="receipts-modal-field">
+            <div className="receipts-modal-field" style={{ position: 'relative' }}>
               <label>חשבון ספק *</label>
               <input
                 type="text"
-                placeholder={`לדוגמה: 60367-${transferModal?.BRANCHNAME || '025'}`}
+                placeholder={allSuppliers.length > 0 ? 'חפש לפי קוד או שם ספק...' : `לדוגמה: 60367-${transferModal?.BRANCHNAME || '025'}`}
                 value={transferAccname}
                 autoFocus
+                onFocus={() => setTransferAccFocused(true)}
+                onBlur={() => setTimeout(() => setTransferAccFocused(false), 150)}
                 onChange={e => {
                   setTransferAccname(e.target.value)
                   setTransferAccdes('')
-                  searchTransferAcc(e.target.value, transferModal?.BRANCHNAME)
-                }}
-                onBlur={async () => {
-                  if (!transferAccname.trim() || transferAccdes) return
-                  try {
-                    const res = await fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(transferAccname.trim())}&branchname=${encodeURIComponent(transferModal?.BRANCHNAME || '')}`).then(r => r.json())
-                    const accs = res.accounts || []
-                    const exact = accs.find(a => a.accname === transferAccname.trim()) || accs[0]
-                    if (exact) setTransferAccdes(exact.accdes)
-                  } catch { /* silent */ }
                 }}
               />
               {transferAccdes && (
@@ -2214,24 +2240,33 @@ export default function BankPage({ mode = 'bank' }) {
                   <strong>{transferAccdes}</strong>
                 </div>
               )}
-              {transferAccSearching && (
+              {transferAccFocused && allSuppliers.length > 0 && (() => {
+                const q = transferAccname.trim().toLowerCase()
+                const filtered = q.length === 0
+                  ? allSuppliers.slice(0, 60)
+                  : allSuppliers.filter(a =>
+                      a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q)
+                    ).slice(0, 60)
+                if (filtered.length === 0) return null
+                return (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                    {filtered.map(a => (
+                      <button
+                        key={a.accname}
+                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccFocused(false) }}
+                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                          borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                        {a.accdes && <span style={{ color: '#374151', marginRight: 6 }}>{a.accdes}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
+              {allSuppliers.length === 0 && transferAccSearching && (
                 <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש חשבונות...</p>
-              )}
-              {transferAccSugg.length > 0 && (
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 160, overflowY: 'auto' }}>
-                  {transferAccSugg.map(a => (
-                    <button
-                      key={a.accname}
-                      onClick={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccSugg([]) }}
-                      style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                        border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                        borderBottom: '1px solid #f3f4f6' }}
-                    >
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                      {' — '}{a.accdes}
-                    </button>
-                  ))}
-                </div>
               )}
             </div>
 
