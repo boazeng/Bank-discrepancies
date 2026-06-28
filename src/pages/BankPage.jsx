@@ -1712,11 +1712,12 @@ export default function BankPage({ mode = 'bank' }) {
               />
               {receiptAccFocused && allCustomers.length > 0 && (() => {
                 const q = modalAccname.trim().toLowerCase()
-                const filtered = q.length === 0
-                  ? allCustomers.slice(0, 60)
-                  : allCustomers.filter(a =>
-                      a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q)
-                    ).slice(0, 60)
+                const branch = receiptModal?.BRANCHNAME
+                const suffix = branch && branch !== '000' ? `-${branch}` : ''
+                const filtered = allCustomers
+                  .filter(a => !suffix || a.accname.endsWith(suffix))
+                  .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .slice(0, 60)
                 if (filtered.length === 0) return null
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
@@ -2242,11 +2243,12 @@ export default function BankPage({ mode = 'bank' }) {
               )}
               {transferAccFocused && allSuppliers.length > 0 && (() => {
                 const q = transferAccname.trim().toLowerCase()
-                const filtered = q.length === 0
-                  ? allSuppliers.slice(0, 60)
-                  : allSuppliers.filter(a =>
-                      a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q)
-                    ).slice(0, 60)
+                const branch = transferModal?.BRANCHNAME
+                const suffix = branch && branch !== '000' ? `-${branch}` : ''
+                const filtered = allSuppliers
+                  .filter(a => !suffix || a.accname.endsWith(suffix))
+                  .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .slice(0, 60)
                 if (filtered.length === 0) return null
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
