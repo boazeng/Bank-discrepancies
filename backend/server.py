@@ -1299,7 +1299,14 @@ def bank_line_create_transfer():
         except Exception as wtax_err:
             logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
 
-        wtax_amount = round(amount * wtax_percent / 100, 2) if wtax_percent else 0
+        # amount from the bank is NET (after withholding was deducted).
+        # QPRICE must be the GROSS amount; WTAX is the withholding portion.
+        if wtax_percent:
+            gross_amount = round(amount / (1 - wtax_percent / 100), 2)
+            wtax_amount  = round(gross_amount - amount, 2)
+        else:
+            gross_amount = amount
+            wtax_amount  = 0
 
         payload = {
             "ACCNAME":      accname,
@@ -1308,7 +1315,7 @@ def bank_line_create_transfer():
             "BRANCHNAME":   branchname,
             "CASHNAME":     cashname,
             "DETAILS":      details,
-            "QPRICE":       amount,
+            "QPRICE":       gross_amount,
             "FNCITEMSFLAG": "Y",
             "WTAXPERCENT":  wtax_percent,
             "WTAX":         wtax_amount,
