@@ -81,18 +81,44 @@ async function main() {
     }
   }
 
-  // Step 2: FNCREF — link journal entry to bank REF (visible reference in Priority)
-  if (journalFncnum && bankRef) {
+  // Step 2: Resolve actual journal FNCNUM when journalFncnum is a document IVNUM
+  // (TINVOICES receipts, EINVOICES invoice-receipts, QINVOICES transfers all create an
+  // FNCTRANS journal entry; BANKRECONSP SCND_IVNUM expects that FNCNUM, not the doc IVNUM)
+  let resolvedFncnum = journalFncnum;
+  if (journalFncnum && !/^\d+$/.test(journalFncnum)) {
+    for (const entity of ['TINVOICES', 'EINVOICES', 'QINVOICES']) {
+      try {
+        const r = await withTimeout(
+          fetch(`${odataBase}/${entity}?$filter=IVNUM eq '${journalFncnum}'&$select=FNCNUM&$top=1`, { headers: readHeaders }),
+          10000, `GET ${entity} FNCNUM`
+        );
+        if (r.ok) {
+          const data = await r.json();
+          const fncnum = ((data.value || [])[0] || {}).FNCNUM;
+          if (fncnum) {
+            resolvedFncnum = String(fncnum);
+            process.stderr.write(`Resolved ${entity} IVNUM=${journalFncnum} → FNCNUM=${resolvedFncnum}\n`);
+            break;
+          }
+        }
+      } catch (e) {
+        process.stderr.write(`${entity} FNCNUM lookup (non-fatal): ${e.message}\n`);
+      }
+    }
+  }
+
+  // Step 3: FNCREF — link journal entry to bank REF (visible reference in Priority)
+  if (resolvedFncnum && bankRef) {
     try {
       const checkResp = await withTimeout(
-        fetch(`${odataBase}/FNCTRANS('${journalFncnum}')?$select=FNCNUM,FNCREF`, { headers: readHeaders }),
-        15000, `GET FNCTRANS ${journalFncnum}`
+        fetch(`${odataBase}/FNCTRANS('${resolvedFncnum}')?$select=FNCNUM,FNCREF`, { headers: readHeaders }),
+        15000, `GET FNCTRANS ${resolvedFncnum}`
       );
       if (checkResp.ok) {
         const current = await checkResp.json();
         if (!current.FNCREF) {
           const patchResp = await withTimeout(
-            fetch(`${odataBase}/FNCTRANS('${journalFncnum}')`, {
+            fetch(`${odataBase}/FNCTRANS('${resolvedFncnum}')`, {
               method: 'PATCH', headers: writeHeaders,
               body: JSON.stringify({ FNCREF: bankRef }),
             }),
@@ -109,7 +135,7 @@ async function main() {
     }
   }
 
-  // Step 3: Login to WCF
+  // Step 4: Login to WCF
   try {
     process.stderr.write(`Login → ${serviceUrl} (${company})\n`);
     await priority.login({
@@ -124,8 +150,9 @@ async function main() {
     return;
   }
 
-  // Step 4: BANKRECONSP direct approach — create reconciliation pair
-  if (journalFncnum && (bpnuma || bankPage)) {
+  // Step 5: BANKRECONSP direct approach — create reconciliation pair
+  // Use resolvedFncnum (the journal entry FNCNUM) as SCND_IVNUM — this is the books side
+  if (resolvedFncnum && (bpnuma || bankPage)) {
     const bookNum = bpnuma || bankPage; // prefer BPNUMA; fallback BANKPAGE string
 
     // Inner helper: try one BANKRECONSP save attempt
@@ -160,7 +187,7 @@ async function main() {
       // Attempt A: FRST_BOOKNUM + SCND_IVNUM + RECON=Y in one save
       let saved = await tryBankreconsp([
         ['FRST_BOOKNUM', bookNum],
-        ['SCND_IVNUM',   journalFncnum],
+        ['SCND_IVNUM',   resolvedFncnum],
         ['RECON',        'Y'],
       ]);
 
@@ -168,7 +195,7 @@ async function main() {
       if (!saved) {
         saved = await tryBankreconsp([
           ['FRST_BOOKNUM', bookNum],
-          ['SCND_IVNUM',   journalFncnum],
+          ['SCND_IVNUM',   resolvedFncnum],
         ]);
       }
 
@@ -176,7 +203,7 @@ async function main() {
       if (!saved && bpnuma && bankPage) {
         saved = await tryBankreconsp([
           ['FRST_BOOKNUM', bankPage],
-          ['SCND_IVNUM',   journalFncnum],
+          ['SCND_IVNUM',   resolvedFncnum],
           ['RECON',        'Y'],
         ]);
       }
@@ -213,7 +240,7 @@ async function main() {
     }
   }
 
-  // Step 5: Fallback — CREDITRECONSP + CLOSECREDITRECONSP
+  // Step 6: Fallback — CREDITRECONSP + CLOSECREDITRECONSP
   if (!reconOk) {
     process.stderr.write('BANKRECONSP did not reconcile — trying CREDITRECONSP fallback\n');
     try {

@@ -174,7 +174,42 @@ async function main() {
   process.stderr.write(`Fetching IV for ${ivnum}...\n`);
   const { iv, final, status, total } = await fetchIV(odataBase, ivnum);
   process.stderr.write(`IV=${iv} | FINAL=${final || 'draft'} | STATUS=${status} | TOTAL=${total}\n`);
-  if (final === 'Y') throw new Error(`Receipt ${ivnum} is already final (FINAL=Y)`);
+  if (final === 'Y') {
+    process.stderr.write(`Receipt ${ivnum} already FINAL=Y — looking up existing final numbers\n`);
+    // Fetch FNCNUM from the record (not included in fetchIV — re-query)
+    let existingFncnum = null;
+    let existingRcIvnum = null;
+    try {
+      const fncResp = await fetch(
+        `${odataBase}/TINVOICES?$filter=IVNUM eq '${ivnum}'&$select=IVNUM,FNCNUM,FINAL&$top=1`,
+        { headers: { Authorization: basicAuth(), Accept: 'application/json' } }
+      );
+      if (fncResp.ok) {
+        const items = (await fncResp.json()).value || [];
+        if (items.length) existingFncnum = items[0].FNCNUM || null;
+      }
+    } catch (e) {
+      process.stderr.write(`FNCNUM lookup failed: ${e.message}\n`);
+    }
+    if (existingFncnum) {
+      try {
+        const rcResp = await fetch(
+          `${odataBase}/TINVOICES?$filter=FNCNUM eq '${existingFncnum}' and FINAL eq 'Y'&$select=IVNUM,FNCNUM&$top=5`,
+          { headers: { Authorization: basicAuth(), Accept: 'application/json' } }
+        );
+        if (rcResp.ok) {
+          const rcItems = (await rcResp.json()).value || [];
+          const rc = rcItems.find(x => x.IVNUM !== ivnum && !x.IVNUM.startsWith('T'));
+          if (rc) existingRcIvnum = rc.IVNUM;
+        }
+      } catch (e) {
+        process.stderr.write(`RC lookup failed: ${e.message}\n`);
+      }
+    }
+    if (!existingRcIvnum) existingRcIvnum = ivnum;
+    process.stdout.write(JSON.stringify({ ok: true, ivnum, iv, fncnum: existingFncnum, rc_ivnum: existingRcIvnum, already_final: true }));
+    return;
+  }
 
   process.stderr.write(`Login → ${serviceUrl} (${company})\n`);
   await priority.login({

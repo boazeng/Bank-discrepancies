@@ -906,6 +906,8 @@ def bank_line_create_invoice_receipt():
         processed.add(txn_id)
         _save_processed_txns(processed)
 
+        _launch_bank_recon(priority_ivnum, cashname, txn_id, label="invoice_receipt")
+
         return jsonify({"ok": True, "priority_ivnum": priority_ivnum})
 
     except http_requests.exceptions.HTTPError as e:
@@ -2321,6 +2323,47 @@ def receipts_close(receipt_id):
         if not priority_ivnum:
             return jsonify({"ok": False, "error": "הקבלה עוד לא נשלחה לפריוריטי"}), 400
 
+        # Pre-check: if already closed in Priority, avoid running CLOSETIV again
+        try:
+            pre_r = http_requests.get(
+                f"{_prio_url()}/TINVOICES?$filter=IVNUM eq '{priority_ivnum}'"
+                "&$select=IV,FINAL,FNCNUM&$top=1",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+            )
+            if pre_r.ok:
+                pre_items = pre_r.json().get("value", [])
+                if pre_items and pre_items[0].get("FINAL") == "Y":
+                    fncnum   = pre_items[0].get("FNCNUM") or None
+                    rc_ivnum = None
+                    if fncnum:
+                        rc_r = http_requests.get(
+                            f"{_prio_url()}/TINVOICES?$filter=FNCNUM eq '{fncnum}' and FINAL eq 'Y'"
+                            "&$select=IVNUM,FNCNUM&$top=5",
+                            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+                        )
+                        if rc_r.ok:
+                            rc_cands = [x for x in rc_r.json().get("value", [])
+                                        if x.get("IVNUM") != priority_ivnum and not (x.get("IVNUM") or "").startswith("T")]
+                            if rc_cands:
+                                rc_ivnum = rc_cands[0]["IVNUM"]
+                    if not rc_ivnum:
+                        rc_ivnum = priority_ivnum
+                    bank_fncnum_orig = rec.get("bank_fncnum") or rec.get("fncnum") or ""
+                    cashname         = rec.get("cashname", "")
+                    receipts_db._save_receipt({
+                        **rec,
+                        "status":      "closed",
+                        "closed_at":   _now_il().isoformat(),
+                        "fncnum":      fncnum,
+                        "rc_ivnum":    rc_ivnum,
+                        "bank_fncnum": bank_fncnum_orig,
+                    })
+                    _launch_bank_recon(fncnum or "", cashname, bank_fncnum_orig, label="receipt-close-precheck")
+                    return jsonify({"ok": True, "ivnum": priority_ivnum, "fncnum": fncnum,
+                                    "rc_ivnum": rc_ivnum, "already_final": True})
+        except Exception as _pre_err:
+            logger.warning(f"receipts_close pre-check failed: {_pre_err}")
+
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
 
         result = _node_run(script_dir, ["close_receipt.js", priority_ivnum])
@@ -2460,6 +2503,45 @@ def receipts_close_einvoice(receipt_id):
         priority_ivnum = rec.get("priority_ivnum")
         if not priority_ivnum:
             return jsonify({"ok": False, "error": "החשבונית עוד לא נשלחה לפריוריטי"}), 400
+
+        # Pre-check: if already closed in Priority, skip CLOSEINVOICE procedure
+        try:
+            pre_ei = http_requests.get(
+                f"{_prio_url()}/EINVOICES?$filter=IVNUM eq '{priority_ivnum}'"
+                "&$select=IV,FINAL,FNCNUM&$top=1",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+            )
+            if pre_ei.ok:
+                pre_ei_items = pre_ei.json().get("value", [])
+                if pre_ei_items and pre_ei_items[0].get("FINAL") == "Y":
+                    fncnum      = pre_ei_items[0].get("FNCNUM") or None
+                    final_ivnum = priority_ivnum
+                    if fncnum:
+                        fi_r = http_requests.get(
+                            f"{_prio_url()}/EINVOICES?$filter=FNCNUM eq '{fncnum}' and FINAL eq 'Y'"
+                            "&$select=IVNUM,FNCNUM&$top=5",
+                            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+                        )
+                        if fi_r.ok:
+                            fi_cands = [x for x in fi_r.json().get("value", [])
+                                        if not (x.get("IVNUM") or "").startswith("T")]
+                            if fi_cands:
+                                final_ivnum = fi_cands[0]["IVNUM"]
+                    bank_fncnum_orig = rec.get("bank_fncnum") or rec.get("fncnum") or ""
+                    cashname         = rec.get("cashname", "")
+                    receipts_db._save_receipt({
+                        **rec,
+                        "status":      "closed",
+                        "closed_at":   _now_il().isoformat(),
+                        "final_ivnum": final_ivnum,
+                        "fncnum":      fncnum,
+                        "bank_fncnum": bank_fncnum_orig,
+                    })
+                    _launch_bank_recon(fncnum or "", cashname, bank_fncnum_orig, label="einvoice-close-precheck")
+                    return jsonify({"ok": True, "ivnum": priority_ivnum, "final_ivnum": final_ivnum,
+                                    "fncnum": fncnum, "already_final": True})
+        except Exception as _pre_ei_err:
+            logger.warning(f"receipts_close_einvoice pre-check failed: {_pre_ei_err}")
 
         script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
         result = _node_run(script_dir, ["close_einvoice.js", priority_ivnum], timeout=60)
