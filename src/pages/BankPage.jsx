@@ -131,6 +131,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [transferAccSugg, setTransferAccSugg]           = useState([])
   const [transferAccSearching, setTransferAccSearching] = useState(false)
   const [transferAccFocused, setTransferAccFocused]     = useState(false)
+  const [transferDropdownOpen, setTransferDropdownOpen] = useState(false)
   const [transferAccFromSugg, setTransferAccFromSugg]   = useState(false)
 
   // Pre-loaded account lists for dropdowns
@@ -721,6 +722,7 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferSuccess('')
     setTransferAccSugg([])
     setTransferAccFocused(false)
+    setTransferDropdownOpen(true)
     setTransferAccFromSugg(false)
     loadAllSuppliers()
     if (txn.DETAILS) {
@@ -799,10 +801,10 @@ export default function BankPage({ mode = 'bank' }) {
   }
 
   async function loadAllSuppliers() {
-    if (allSuppliers.length > 0) return
+    if (allSuppliers.length > 0) { setTransferDropdownOpen(true); return }
     try {
       const res = await fetch(`${API}/api/receipts/all-suppliers`).then(r => r.json())
-      if (res.ok) setAllSuppliers(res.accounts || [])
+      if (res.ok) { setAllSuppliers(res.accounts || []); setTransferDropdownOpen(true) }
     } catch { /* silent */ }
   }
 
@@ -2242,12 +2244,13 @@ export default function BankPage({ mode = 'bank' }) {
                 placeholder={allSuppliers.length > 0 ? 'חפש לפי קוד או שם ספק...' : `לדוגמה: 60367-${transferModal?.BRANCHNAME || '025'}`}
                 value={transferAccname}
                 autoFocus
-                onFocus={() => setTransferAccFocused(true)}
-                onBlur={() => setTimeout(() => setTransferAccFocused(false), 150)}
+                onFocus={() => { setTransferAccFocused(true); setTransferDropdownOpen(true) }}
+                onBlur={() => setTimeout(() => { setTransferAccFocused(false); setTransferDropdownOpen(false) }, 150)}
                 onChange={e => {
                   setTransferAccname(e.target.value)
                   setTransferAccdes('')
                   setTransferAccFromSugg(false)
+                  setTransferDropdownOpen(true)
                 }}
               />
               {transferAccdes && (
@@ -2261,21 +2264,27 @@ export default function BankPage({ mode = 'bank' }) {
                   )}
                 </div>
               )}
-              {transferAccFocused && allSuppliers.length > 0 && (() => {
+              {transferDropdownOpen && allSuppliers.length > 0 && (() => {
                 const q = transferAccname.trim().toLowerCase()
                 const branch = transferModal?.BRANCHNAME
                 const suffix = branch && branch !== '000' ? `-${branch}` : ''
-                const filtered = allSuppliers
-                  .filter(a => !suffix || a.accname.endsWith(suffix))
+                const branchFiltered = suffix ? allSuppliers.filter(a => a.accname.endsWith(suffix)) : allSuppliers
+                const pool = branchFiltered.length > 0 ? branchFiltered : allSuppliers
+                const filtered = pool
                   .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
                   .slice(0, 60)
                 if (filtered.length === 0) return null
                 return (
-                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 240, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                    {suffix && branchFiltered.length === 0 && (
+                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
+                        כל הספקים (לא נמצאו ספקים לסניף {branch})
+                      </div>
+                    )}
                     {filtered.map(a => (
                       <button
                         key={a.accname}
-                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccFocused(false); setTransferAccFromSugg(false) }}
+                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferDropdownOpen(false); setTransferAccFromSugg(false) }}
                         style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
                           border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
                           borderBottom: '1px solid #f3f4f6' }}
@@ -2287,8 +2296,8 @@ export default function BankPage({ mode = 'bank' }) {
                   </div>
                 )
               })()}
-              {allSuppliers.length === 0 && transferAccSearching && (
-                <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש חשבונות...</p>
+              {allSuppliers.length === 0 && (
+                <p style={{ fontSize: 12, color: '#9ca3af', margin: '4px 0 0' }}>טוען רשימת ספקים...</p>
               )}
             </div>
 
