@@ -92,3 +92,5 @@ bash ~/Bank-discrepancies/deploy/update.sh
 | `bank-discrepancies.service` | systemd unit (gunicorn, port 5000, `BANK_ENV_FILE`). |
 | `nginx-bank.conf` | nginx reverse-proxy server block for the subdomain. |
 | `update.sh` | git pull + reinstall deps + restart service. |
+
+<!-- deploy mechanism: the live Mac uses the webhook deployer (deploy.newavera.co.il -> ~/server/deployer/deploy.sh, --force-recreate). GitHub Actions cannot reach the home Mac (behind Cloudflare Tunnel + NAT). -->
