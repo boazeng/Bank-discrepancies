@@ -806,19 +806,22 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferError('')
     try {
       const txn  = transferModal
+      const accnameTrimmed = transferAccname.trim()
+      const supplierRec = allSuppliers.find(s => s.accname === accnameTrimmed)
       const resp = await fetch(`${API}/api/receipts/bank-line/create-transfer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          txn_id:     txn.FNCNUM,
-          bank_ref:   txn.REF || '',
-          direction:  txn.direction,
-          amount:     txn.SUM1,
-          cashname:   txn.CASHNAME,
-          branchname: txn.BRANCHNAME,
-          accname:    transferAccname.trim(),
-          details:    transferDetails,
-          ivdate:     (txn.CURDATE || '').slice(0, 10),
+          txn_id:      txn.FNCNUM,
+          bank_ref:    txn.REF || '',
+          direction:   txn.direction,
+          amount:      txn.SUM1,
+          cashname:    txn.CASHNAME,
+          branchname:  txn.BRANCHNAME,
+          accname:     accnameTrimmed,
+          details:     transferDetails,
+          ivdate:      (txn.CURDATE || '').slice(0, 10),
+          wtax_percent: supplierRec?.wtaxpercent || 0,
         }),
       })
       const data = await resp.json()

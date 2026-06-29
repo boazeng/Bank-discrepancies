@@ -1287,19 +1287,20 @@ def bank_line_create_transfer():
         if not details:
             details = "תשלום"
 
-        wtax_percent = 0
-        try:
-            acc_safe = accname.replace("'", "")
-            fncsup_resp = http_requests.get(
-                f"{_prio_url()}/FNCSUP?$filter=ACCNAME eq '{acc_safe}'&$select=WTAXPERCENT&$top=1",
-                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=10, verify=False,
-            )
-            if fncsup_resp.ok:
-                fncsup_rows = fncsup_resp.json().get("value", [])
-                if fncsup_rows:
-                    wtax_percent = fncsup_rows[0].get("WTAXPERCENT") or 0
-        except Exception as wtax_err:
-            logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
+        wtax_percent = float(data.get("wtax_percent") or 0)
+        if not wtax_percent:
+            try:
+                acc_safe = accname.replace("'", "")
+                fncsup_resp = http_requests.get(
+                    f"{_prio_url()}/FNCSUP?$filter=ACCNAME eq '{acc_safe}'&$select=WTAXPERCENT&$top=1",
+                    headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=10, verify=False,
+                )
+                if fncsup_resp.ok:
+                    fncsup_rows = fncsup_resp.json().get("value", [])
+                    if fncsup_rows:
+                        wtax_percent = fncsup_rows[0].get("WTAXPERCENT") or 0
+            except Exception as wtax_err:
+                logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
 
         # amount is the NET bank transfer; QPRICE must be the gross (before withholding).
         if wtax_percent:
@@ -1721,12 +1722,12 @@ def all_suppliers_list():
         if _all_suppliers_cache["data"] is not None and (now - _all_suppliers_cache["ts"]) < _ALL_CACHE_TTL:
             return jsonify({"ok": True, "accounts": _all_suppliers_cache["data"], "from_cache": True})
         r = http_requests.get(
-            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES&$top=500",
+            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES,WTAXPERCENT&$top=500",
             headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
         )
         r.raise_for_status()
         accounts = [
-            {"accname": s["ACCNAME"], "accdes": s.get("SUPDES", "")}
+            {"accname": s["ACCNAME"], "accdes": s.get("SUPDES", ""), "wtaxpercent": s.get("WTAXPERCENT") or 0}
             for s in r.json().get("value", [])
             if s.get("ACCNAME")
         ]
