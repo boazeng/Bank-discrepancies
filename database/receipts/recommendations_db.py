@@ -259,3 +259,5 @@ def seed_from_templates(templates):
 
 # Initialise the schema on import.
 _init()
+
+# auto-deploy poller test marker
