@@ -1340,7 +1340,7 @@ def bank_line_create_transfer():
             q_key = f"IVNUM='{ivnum}',IVTYPE='{ivtype}',DEBIT='{debit}'"
             hfnc_resp = http_requests.post(
                 f"{_prio_url()}/QINVOICES({q_key})/HFNCITEMS_SUBFORM",
-                json={"ACCNAME": accname, "DEBIT": amount, "DETAILS": details},
+                json={"ACCNAME": accname, "DEBIT": gross_amount, "DETAILS": details},
                 headers=_PRIO_WRITE_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
             )
             if not hfnc_resp.ok:
