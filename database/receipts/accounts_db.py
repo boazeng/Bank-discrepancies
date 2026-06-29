@@ -82,12 +82,23 @@ def upsert(accname, accdes="", branch_code="000", branch_des="", tb_code="", tb_
         c.close()
 
 
-def search(q="", branch="", limit=50):
+def search(q="", branch="", limit=50, acc_suffix=""):
     """Search the local accounts for the picker. q matches account number or
-    description (FTS prefix); optional branch filter."""
+    description (FTS prefix). Optional filters:
+      branch     - exact match on the stored branch_code column.
+      acc_suffix - the operational branch code (e.g. '200'); accounts are kept
+                   only when their number ends with '-<acc_suffix>'. This mirrors
+                   the app convention where the branch is encoded as a suffix of
+                   the account number (e.g. 60367-200 = supplier 60367, branch
+                   200; no suffix = main company 000)."""
     c = _conn()
     try:
         q = (q or "").strip()
+        acc_suffix = (acc_suffix or "").strip()
+        suffix_clause, suffix_param = "", None
+        if acc_suffix and acc_suffix != "000":
+            suffix_clause = " AND a.accname LIKE ?"
+            suffix_param = f"%-{acc_suffix}"
         if q:
             toks = [t.replace('"', '') for t in re.split(r"\s+", q) if t][:10]
             fq = " ".join(f'"{t}"*' for t in toks) if toks else ""
@@ -96,17 +107,21 @@ def search(q="", branch="", limit=50):
             params = [fq]
             if branch:
                 sql += " AND a.branch_code=?"; params.append(branch)
+            if suffix_param is not None:
+                sql += suffix_clause; params.append(suffix_param)
             sql += " LIMIT ?"; params.append(limit)
             try:
                 rows = c.execute(sql, params).fetchall()
             except sqlite3.OperationalError:
                 return []
         else:
-            sql = "SELECT * FROM accounts"
+            sql = "SELECT * FROM accounts a WHERE 1=1"
             params = []
             if branch:
-                sql += " WHERE branch_code=?"; params.append(branch)
-            sql += " ORDER BY accname LIMIT ?"; params.append(limit)
+                sql += " AND a.branch_code=?"; params.append(branch)
+            if suffix_param is not None:
+                sql += suffix_clause; params.append(suffix_param)
+            sql += " ORDER BY a.accname LIMIT ?"; params.append(limit)
             rows = c.execute(sql, params).fetchall()
         return [dict(r) for r in rows]
     finally:

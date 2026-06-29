@@ -2251,6 +2251,7 @@ export default function BankPage({ mode = 'bank' }) {
                   setTransferAccdes('')
                   setTransferAccFromSugg(false)
                   setTransferDropdownOpen(true)
+                  searchTransferAcc(e.target.value, transferModal?.BRANCHNAME)
                 }}
               />
               {transferAccdes && (
@@ -2264,7 +2265,7 @@ export default function BankPage({ mode = 'bank' }) {
                   )}
                 </div>
               )}
-              {transferDropdownOpen && allSuppliers.length > 0 && (() => {
+              {transferDropdownOpen && (allSuppliers.length > 0 || transferAccSugg.length > 0) && (() => {
                 const q = transferAccname.trim().toLowerCase()
                 const branch = transferModal?.BRANCHNAME
                 const suffix = branch && branch !== '000' ? `-${branch}` : ''
@@ -2273,26 +2274,37 @@ export default function BankPage({ mode = 'bank' }) {
                 const filtered = pool
                   .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
                   .slice(0, 60)
-                if (filtered.length === 0) return null
+                const supNames = new Set(filtered.map(a => a.accname))
+                const others = transferAccSugg.filter(a => !supNames.has(a.accname)).slice(0, 30)
+                if (filtered.length === 0 && others.length === 0) return null
+                const pick = (a) => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferDropdownOpen(false); setTransferAccFromSugg(false) }
+                const row = (a) => (
+                  <button
+                    key={a.accname}
+                    onMouseDown={() => pick(a)}
+                    style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                      border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                      borderBottom: '1px solid #f3f4f6' }}
+                  >
+                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                    {a.accdes && <span style={{ color: '#374151', marginRight: 6 }}>{a.accdes}</span>}
+                  </button>
+                )
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 240, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
-                    {suffix && branchFiltered.length === 0 && (
+                    {suffix && branchFiltered.length === 0 && filtered.length > 0 && (
                       <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
                         כל הספקים (לא נמצאו ספקים לסניף {branch})
                       </div>
                     )}
-                    {filtered.map(a => (
-                      <button
-                        key={a.accname}
-                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferDropdownOpen(false); setTransferAccFromSugg(false) }}
-                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                          borderBottom: '1px solid #f3f4f6' }}
-                      >
-                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                        {a.accdes && <span style={{ color: '#374151', marginRight: 6 }}>{a.accdes}</span>}
-                      </button>
-                    ))}
+                    {filtered.map(row)}
+                    {others.length > 0 && (
+                      <div style={{ padding: '4px 10px', fontSize: 11, color: '#9ca3af', background: '#f9fafb',
+                        borderTop: filtered.length > 0 ? '1px solid #eef1f6' : 'none', borderBottom: '1px solid #f3f4f6' }}>
+                        כל החשבונות{suffix ? ` (סניף ${branch})` : ''}{transferAccSearching ? ' …' : ''}
+                      </div>
+                    )}
+                    {others.map(row)}
                   </div>
                 )
               })()}

@@ -1684,12 +1684,36 @@ def get_bank_gl_account():
 
 @app.route("/api/receipts/priority-accounts", methods=["GET"])
 def priority_accounts_search():
-    """Search Priority chart of accounts (ACCOUNTS) for autocomplete."""
+    """Search the chart of accounts for autocomplete.
+
+    Serves from the local SQLite cache (accounts_db) so the picker is fast and
+    does not hit Priority on every keystroke. Results are pre-filtered by the
+    transaction branch (accounts whose number ends with '-<branch>'; no suffix =
+    main company 000). Falls back to the legacy json cache / live Priority only
+    when the local cache is empty."""
     try:
         q          = (request.args.get("q")          or "").strip()
-        branchname = (request.args.get("branchname") or "").strip()
+        branchname = (request.args.get("branchname") or request.args.get("branch") or "").strip()
         if len(q) < 1:
             return jsonify({"ok": True, "accounts": []})
+
+        # --- Primary: local SQLite cache (synced from Priority on demand) ---
+        try:
+            if accounts_db.count() > 0:
+                rows = accounts_db.search(q, limit=50, acc_suffix=branchname)
+                accounts = [
+                    {
+                        "accname":     r["accname"],
+                        "accdes":      r.get("accdes", ""),
+                        "branch_code": r.get("branch_code", ""),
+                        "tb_code":     r.get("tb_code", ""),
+                        "tb_des":      r.get("tb_des", ""),
+                    }
+                    for r in rows
+                ]
+                return jsonify({"ok": True, "accounts": accounts, "from_cache": "db"})
+        except Exception:
+            pass  # fall through to legacy cache / live Priority
 
         suffix = f"-{branchname}" if (branchname and branchname != "000") else ""
 
