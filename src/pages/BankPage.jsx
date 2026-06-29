@@ -131,6 +131,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [transferAccSugg, setTransferAccSugg]           = useState([])
   const [transferAccSearching, setTransferAccSearching] = useState(false)
   const [transferAccFocused, setTransferAccFocused]     = useState(false)
+  const [transferWtax, setTransferWtax]                 = useState(0)
 
   // Pre-loaded account lists for dropdowns
   const [allSuppliers, setAllSuppliers] = useState([])
@@ -720,6 +721,7 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferSuccess('')
     setTransferAccSugg([])
     setTransferAccFocused(false)
+    setTransferWtax(0)
     loadAllSuppliers()
   }
 
@@ -807,21 +809,20 @@ export default function BankPage({ mode = 'bank' }) {
     try {
       const txn  = transferModal
       const accnameTrimmed = transferAccname.trim()
-      const supplierRec = allSuppliers.find(s => s.accname.toLowerCase() === accnameTrimmed.toLowerCase())
       const resp = await fetch(`${API}/api/receipts/bank-line/create-transfer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          txn_id:      txn.FNCNUM,
-          bank_ref:    txn.REF || '',
-          direction:   txn.direction,
-          amount:      txn.SUM1,
-          cashname:    txn.CASHNAME,
-          branchname:  txn.BRANCHNAME,
-          accname:     accnameTrimmed,
-          details:     transferDetails,
-          ivdate:      (txn.CURDATE || '').slice(0, 10),
-          wtax_percent: supplierRec?.wtaxpercent || 0,
+          txn_id:       txn.FNCNUM,
+          bank_ref:     txn.REF || '',
+          direction:    txn.direction,
+          amount:       txn.SUM1,
+          cashname:     txn.CASHNAME,
+          branchname:   txn.BRANCHNAME,
+          accname:      accnameTrimmed,
+          details:      transferDetails,
+          ivdate:       (txn.CURDATE || '').slice(0, 10),
+          wtax_percent: transferWtax,
         }),
       })
       const data = await resp.json()
@@ -2258,7 +2259,7 @@ export default function BankPage({ mode = 'bank' }) {
                     {filtered.map(a => (
                       <button
                         key={a.accname}
-                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccFocused(false) }}
+                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferWtax(a.wtaxpercent || 0); setTransferAccFocused(false) }}
                         style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
                           border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
                           borderBottom: '1px solid #f3f4f6' }}
@@ -2281,6 +2282,19 @@ export default function BankPage({ mode = 'bank' }) {
                 type="text"
                 value={transferDetails}
                 onChange={e => setTransferDetails(e.target.value)}
+              />
+            </div>
+
+            <div className="receipts-modal-field">
+              <label>ניכוי מס במקור (%)</label>
+              <input
+                type="number"
+                min="0"
+                max="100"
+                step="0.01"
+                value={transferWtax}
+                onChange={e => setTransferWtax(parseFloat(e.target.value) || 0)}
+                style={{ width: 100 }}
               />
             </div>
 
