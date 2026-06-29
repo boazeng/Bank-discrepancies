@@ -150,90 +150,99 @@ async function main() {
     return;
   }
 
-  // Step 5: BANKRECONSP direct approach — create reconciliation pair
-  // Use resolvedFncnum (the journal entry FNCNUM) as SCND_IVNUM — this is the books side
+  // Step 5: BANKRECONSP — find existing rows, activate them, mark RECON=Y, then CLOSEBANKRECON
+  // BANKRECONSP is NOT a data-entry form — newRow() is wrong. We need to navigate
+  // existing rows (bank side + books side) and mark them via activateRow + fieldUpdate.
   if (resolvedFncnum && (bpnuma || bankPage)) {
-    const bookNum = bpnuma || bankPage; // prefer BPNUMA; fallback BANKPAGE string
-
-    // Inner helper: try one BANKRECONSP save attempt
-    async function tryBankreconsp(fieldSets) {
+    try {
       const form = await withTimeout(
         priority.formStart('BANKRECONSP', null, null, company),
         20000, 'formStart BANKRECONSP'
       );
       process.stderr.write('BANKRECONSP opened\n');
+
+      let bankRowMarked = false;
+      let booksRowMarked = false;
+
+      // Fetch all visible rows so we can inspect field names and find our entries.
+      // Full dump logged to stderr — lets us understand the form structure on first run.
       try {
-        await form.newRow();
-        for (const [field, value] of fieldSets) {
-          const r = await withTimeout(
-            form.fieldUpdate(field, value),
-            10000, `fieldUpdate ${field}`
-          ).catch(e => ({ _err: e.message }));
-          process.stderr.write(`  ${field}=${value}: ${JSON.stringify(r).slice(0, 80)}\n`);
-        }
-        const sr = await withTimeout(form.saveRow(0), 20000, 'saveRow');
-        process.stderr.write(`saveRow result: ${JSON.stringify(sr || {}).slice(0, 100)}\n`);
-        await form.endCurrentForm(false).catch(() => {});
-        return true;
-      } catch (e) {
-        process.stderr.write(`saveRow failed: ${e.message}\n`);
-        await form.undo().catch(() => {});
-        await form.endCurrentForm(false).catch(() => {});
-        return false;
-      }
-    }
+        const rows = await withTimeout(form.getRows(0), 15000, 'BANKRECONSP getRows');
+        const rowArray = Array.isArray(rows) ? rows
+          : (rows?.Rows || rows?.rows || rows?.value || []);
+        process.stderr.write(`BANKRECONSP row count=${rowArray.length} keys=${Object.keys(rows || {}).join(',')}\n`);
 
-    try {
-      // Attempt A: FRST_BOOKNUM + SCND_IVNUM + RECON=Y in one save
-      let saved = await tryBankreconsp([
-        ['FRST_BOOKNUM', bookNum],
-        ['SCND_IVNUM',   resolvedFncnum],
-        ['RECON',        'Y'],
-      ]);
+        for (let i = 0; i < rowArray.length; i++) {
+          const row = rowArray[i];
+          // Log each row fully so we learn the real field names
+          process.stderr.write(`  Row[${i}]: ${JSON.stringify(row).slice(0, 300)}\n`);
 
-      // Attempt B: without RECON=Y (save pair first, mark separately)
-      if (!saved) {
-        saved = await tryBankreconsp([
-          ['FRST_BOOKNUM', bookNum],
-          ['SCND_IVNUM',   resolvedFncnum],
-        ]);
-      }
-
-      // Attempt C: FRST_BOOKNUM = BANKPAGE integer string (when bpnuma was used in A/B)
-      if (!saved && bpnuma && bankPage) {
-        saved = await tryBankreconsp([
-          ['FRST_BOOKNUM', bankPage],
-          ['SCND_IVNUM',   resolvedFncnum],
-          ['RECON',        'Y'],
-        ]);
-      }
-
-      if (saved) {
-        // Run CLOSEBANKRECON to finalise the matched pair
-        try {
-          process.stderr.write('procStart CLOSEBANKRECON...\n');
-          let step = await withTimeout(
-            priority.procStart('CLOSEBANKRECON', 'P', null, company),
-            30000, 'procStart CLOSEBANKRECON'
+          // Try every plausible field name for the bank-side identifier (BPNUMA)
+          const rowBankId = String(
+            row.BPNUMA || row.FRST_BOOKNUM || row.BANKNUM || row.BANKREC || ''
           );
-          let d = 0;
-          while (step && d < 10) {
-            const t = step.type;
-            process.stderr.write(`  CLOSEBANKRECON[${d}] type=${t} msg=${(step.message || '').slice(0, 60)}\n`);
-            if (t === 'end' || t === 'finished') { reconOk = true; break; }
-            if (t === 'message' && step.proc?.message) {
-              step = await withTimeout(step.proc.message(1), 30000, `CLOSEBANKRECON.msg${d}`);
-            } else if (step.proc?.continueProc) {
-              step = await withTimeout(step.proc.continueProc(), 60000, `CLOSEBANKRECON.cont${d}`);
-            } else break;
-            d++;
+          // Try every plausible field name for the books-side identifier (FNCNUM)
+          const rowBooksId = String(
+            row.FNCNUM || row.SCND_IVNUM || row.IVNUM || row.BOOKNUM || ''
+          );
+
+          const isBankRow  = bpnuma   && rowBankId  === String(bpnuma);
+          const isBooksRow = resolvedFncnum && rowBooksId === String(resolvedFncnum);
+
+          if (isBankRow || isBooksRow) {
+            try {
+              await withTimeout(form.activateRow(i), 10000, `activateRow ${i}`);
+              const fr = await withTimeout(
+                form.fieldUpdate('RECON', 'Y'), 10000, `fieldUpdate RECON row ${i}`
+              ).catch(e => ({ _err: e.message }));
+              process.stderr.write(`  RECON=Y row ${i}: ${JSON.stringify(fr).slice(0, 80)}\n`);
+              await withTimeout(form.saveRow(0), 15000, `saveRow ${i}`).catch(e =>
+                process.stderr.write(`  saveRow ${i}: ${e.message}\n`)
+              );
+              if (isBankRow)  { bankRowMarked  = true; process.stderr.write(`Bank row ${i} marked\n`); }
+              if (isBooksRow) { booksRowMarked = true; process.stderr.write(`Books row ${i} marked\n`); }
+            } catch (e) {
+              process.stderr.write(`  activateRow/fieldUpdate ${i}: ${e.message}\n`);
+            }
           }
-          if (!reconOk) reconOk = true; // saved OK even if CLOSEBANKRECON returned no 'end' step
-          process.stderr.write(`CLOSEBANKRECON done\n`);
-        } catch (e) {
-          process.stderr.write(`CLOSEBANKRECON (non-fatal): ${e.message}\n`);
-          reconOk = true; // saveRow succeeded — treat as partial success
         }
+      } catch (e) {
+        process.stderr.write(`getRows/activate: ${e.message}\n`);
+      }
+
+      await form.endCurrentForm(false).catch(() => {});
+      process.stderr.write(`BANKRECONSP done — bankMarked=${bankRowMarked} booksMarked=${booksRowMarked}\n`);
+
+      // Run CLOSEBANKRECON regardless — it finalises whatever is currently marked
+      try {
+        process.stderr.write('procStart CLOSEBANKRECON...\n');
+        let step = await withTimeout(
+          priority.procStart('CLOSEBANKRECON', 'P', null, company),
+          30000, 'procStart CLOSEBANKRECON'
+        );
+        let d = 0;
+        while (step && d < 10) {
+          const t = step.type;
+          process.stderr.write(`  CLOSEBANKRECON[${d}] type=${t} msg=${(step.message || '').slice(0, 60)}\n`);
+          if (t === 'end' || t === 'finished') { reconOk = true; break; }
+          if (t === 'inputFields') {
+            // Provide CASHNAME as filter if asked
+            const fields = (step.input?.EditFields || []).map(f => ({
+              field: f.field, op: 0, value: f.field === 1 ? cashname : '', op2: 0, value2: '',
+            }));
+            step = await withTimeout(step.proc.inputFields(1, { EditFields: fields }), 30000, `CLOSEBANKRECON.inputFields${d}`);
+          } else if (t === 'message' && step.proc?.message) {
+            step = await withTimeout(step.proc.message(1), 30000, `CLOSEBANKRECON.msg${d}`);
+          } else if (step.proc?.continueProc) {
+            step = await withTimeout(step.proc.continueProc(), 60000, `CLOSEBANKRECON.cont${d}`);
+          } else break;
+          d++;
+        }
+        if (!reconOk) reconOk = (bankRowMarked || booksRowMarked);
+        process.stderr.write(`CLOSEBANKRECON done reconOk=${reconOk}\n`);
+      } catch (e) {
+        process.stderr.write(`CLOSEBANKRECON (non-fatal): ${e.message}\n`);
+        reconOk = (bankRowMarked || booksRowMarked);
       }
     } catch (e) {
       process.stderr.write(`BANKRECONSP approach error (non-fatal): ${e.message}\n`);
