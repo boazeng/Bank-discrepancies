@@ -807,7 +807,7 @@ export default function BankPage({ mode = 'bank' }) {
     try {
       const txn  = transferModal
       const accnameTrimmed = transferAccname.trim()
-      const supplierRec = allSuppliers.find(s => s.accname === accnameTrimmed)
+      const supplierRec = allSuppliers.find(s => s.accname.toLowerCase() === accnameTrimmed.toLowerCase())
       const resp = await fetch(`${API}/api/receipts/bank-line/create-transfer`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
