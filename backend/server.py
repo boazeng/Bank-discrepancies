@@ -1600,6 +1600,21 @@ def transfer_finalize(ivnum):
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+@app.route("/api/receipts/transfer-suggestion", methods=["GET"])
+def transfer_suggestion():
+    """Return saved supplier suggestion for a bank transfer based on past patterns."""
+    try:
+        details = (request.args.get("details") or "").strip()
+        if not details or not transaction_patterns_db:
+            return jsonify({"ok": True, "accname": "", "accdes": ""})
+        pattern = transaction_patterns_db.find_pattern(details, direction="-")
+        if pattern and pattern.get("action") == "transfer":
+            return jsonify({"ok": True, "accname": pattern.get("accname", ""), "accdes": pattern.get("accdes", "")})
+        return jsonify({"ok": True, "accname": "", "accdes": ""})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
 @app.route("/api/receipts/journal-template", methods=["GET"])
 def journal_template_suggest():
     """Return saved counterpart-account suggestion for a transaction description."""
@@ -1732,7 +1747,7 @@ def all_suppliers_list():
         if _all_suppliers_cache["data"] is not None and (now - _all_suppliers_cache["ts"]) < _ALL_CACHE_TTL:
             return jsonify({"ok": True, "accounts": _all_suppliers_cache["data"], "from_cache": True})
         r = http_requests.get(
-            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES,WTAXPERCENT&$top=500",
+            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES,WTAXPERCENT&$top=2000",
             headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
         )
         r.raise_for_status()

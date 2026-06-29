@@ -131,6 +131,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [transferAccSugg, setTransferAccSugg]           = useState([])
   const [transferAccSearching, setTransferAccSearching] = useState(false)
   const [transferAccFocused, setTransferAccFocused]     = useState(false)
+  const [transferAccFromSugg, setTransferAccFromSugg]   = useState(false)
 
   // Pre-loaded account lists for dropdowns
   const [allSuppliers, setAllSuppliers] = useState([])
@@ -720,7 +721,20 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferSuccess('')
     setTransferAccSugg([])
     setTransferAccFocused(false)
+    setTransferAccFromSugg(false)
     loadAllSuppliers()
+    if (txn.DETAILS) {
+      fetch(`${API}/api/receipts/transfer-suggestion?details=${encodeURIComponent(txn.DETAILS)}`)
+        .then(r => r.json())
+        .then(d => {
+          if (d.ok && d.accname) {
+            setTransferAccname(d.accname)
+            setTransferAccdes(d.accdes || '')
+            setTransferAccFromSugg(true)
+          }
+        })
+        .catch(() => {})
+    }
   }
 
   async function finalizeTransfer(ivnum) {
@@ -2233,12 +2247,18 @@ export default function BankPage({ mode = 'bank' }) {
                 onChange={e => {
                   setTransferAccname(e.target.value)
                   setTransferAccdes('')
+                  setTransferAccFromSugg(false)
                 }}
               />
               {transferAccdes && (
                 <div style={{ fontSize: 12, color: '#374151', marginTop: 3, paddingRight: 2 }}>
                   <span style={{ color: '#6b7280' }}>שם חשבון: </span>
                   <strong>{transferAccdes}</strong>
+                  {transferAccFromSugg && (
+                    <span style={{ marginRight: 8, fontSize: 11, color: '#7c3aed', background: '#f5f3ff', border: '1px solid #c4b5fd', borderRadius: 4, padding: '1px 6px' }}>
+                      מהמלצות
+                    </span>
+                  )}
                 </div>
               )}
               {transferAccFocused && allSuppliers.length > 0 && (() => {
@@ -2255,7 +2275,7 @@ export default function BankPage({ mode = 'bank' }) {
                     {filtered.map(a => (
                       <button
                         key={a.accname}
-                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccFocused(false) }}
+                        onMouseDown={() => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferAccFocused(false); setTransferAccFromSugg(false) }}
                         style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
                           border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
                           borderBottom: '1px solid #f3f4f6' }}
