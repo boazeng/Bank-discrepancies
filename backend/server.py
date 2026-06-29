@@ -1301,10 +1301,10 @@ def bank_line_create_transfer():
         except Exception as wtax_err:
             logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
 
-        # amount from the bank is NET (after withholding was deducted).
-        # QPRICE must be the GROSS amount; WTAX is the withholding portion.
+        # amount is the payment to supplier; QPRICE = amount + withholding so that
+        # after deducting WTAX the supplier nets the original amount.
         if wtax_percent:
-            gross_amount = round(amount / (1 - wtax_percent / 100), 2)
+            gross_amount = round(amount * (1 + wtax_percent / 100), 2)
             wtax_amount  = round(gross_amount - amount, 2)
         else:
             gross_amount = amount
