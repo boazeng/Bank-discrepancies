@@ -1776,8 +1776,27 @@ _ALL_CACHE_TTL = 600  # 10 minutes
 
 @app.route("/api/receipts/all-suppliers", methods=["GET"])
 def all_suppliers_list():
-    """Return all supplier accounts from FNCSUP for dropdown (cached 10 min)."""
+    """Return accounts for the transfer-modal dropdown, served from the local
+    SQLite cache so the modal opens instantly (no Priority round-trip). Optional
+    ?branch=<code> returns only that branch's accounts (number ends with
+    '-<branch>'; no branch / 000 = main company). The supplier withholding %
+    (wtaxpercent) is intentionally 0 here: it is read back from QINVOICES (filled
+    by Priority from the supplier's settings) at create-transfer time, so the
+    list does not need it. Falls back to live Priority FNCSUP only if the local
+    cache is empty (note: FNCSUP is currently not API-enabled in Priority)."""
     import time
+    branch = (request.args.get("branch") or "").strip()
+    # --- Primary: local SQLite cache ---
+    try:
+        if accounts_db.count() > 0:
+            rows = accounts_db.search("", limit=3000, acc_suffix=branch)
+            accounts = [
+                {"accname": r["accname"], "accdes": r.get("accdes", ""), "wtaxpercent": 0}
+                for r in rows
+            ]
+            return jsonify({"ok": True, "accounts": accounts, "from_cache": "db"})
+    except Exception:
+        pass  # fall through to legacy live Priority
     try:
         now = time.time()
         if _all_suppliers_cache["data"] is not None and (now - _all_suppliers_cache["ts"]) < _ALL_CACHE_TTL:

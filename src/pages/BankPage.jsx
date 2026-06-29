@@ -724,7 +724,8 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferAccFocused(false)
     setTransferDropdownOpen(true)
     setTransferAccFromSugg(false)
-    loadAllSuppliers()
+    setAllSuppliers([])
+    loadAllSuppliers(txn.BRANCHNAME)
     if (txn.DETAILS) {
       fetch(`${API}/api/receipts/transfer-suggestion?details=${encodeURIComponent(txn.DETAILS)}`)
         .then(r => r.json())
@@ -800,10 +801,11 @@ export default function BankPage({ mode = 'bank' }) {
     } catch { /* silent */ } finally { setTransferAccSearching(false) }
   }
 
-  async function loadAllSuppliers() {
-    if (allSuppliers.length > 0) { setTransferDropdownOpen(true); return }
+  async function loadAllSuppliers(branch) {
+    // Served from the local SQLite cache, branch-filtered — fast, so refetch per
+    // modal open (the branch differs between transactions).
     try {
-      const res = await fetch(`${API}/api/receipts/all-suppliers`).then(r => r.json())
+      const res = await fetch(`${API}/api/receipts/all-suppliers?branch=${encodeURIComponent(branch || '')}`).then(r => r.json())
       if (res.ok) { setAllSuppliers(res.accounts || []); setTransferDropdownOpen(true) }
     } catch { /* silent */ }
   }
