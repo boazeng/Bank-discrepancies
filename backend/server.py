@@ -185,6 +185,18 @@ except Exception as _rec2_db_err:
     logger.error(f"recommendations_db load FAILED: {_rec2_db_err}")
     recommendations_db = None
 
+# Load Priority accounts cache module (SQLite + FTS5)
+try:
+    acc2_db_path = PROJECT_ROOT / "database" / "receipts" / "accounts_db.py"
+    spec_acc2_db = importlib.util.spec_from_file_location("accounts_db", acc2_db_path)
+    accounts_db = importlib.util.module_from_spec(spec_acc2_db)
+    sys.modules["accounts_db"] = accounts_db
+    spec_acc2_db.loader.exec_module(accounts_db)
+    logger.info(f"accounts_db loaded from {acc2_db_path}")
+except Exception as _acc2_db_err:
+    logger.error(f"accounts_db load FAILED: {_acc2_db_err}")
+    accounts_db = None
+
 app = Flask(__name__)
 CORS(app)
 
@@ -2863,6 +2875,86 @@ def recommendations_match():
             direction=request.args.get("direction", ""),
         )
         return jsonify({"ok": True, "matches": rows})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+# ── Priority accounts cache (sync from Priority + local search) ──────────────
+
+@app.route("/api/receipts/accounts/status", methods=["GET"])
+def accounts_status():
+    if not accounts_db:
+        return jsonify({"ok": False, "error": "accounts DB unavailable"}), 500
+    return jsonify({"ok": True, "total": accounts_db.count(),
+                    "last_synced_at": accounts_db.last_synced_at(),
+                    "last_udate": accounts_db.get_last_udate()})
+
+
+@app.route("/api/receipts/accounts", methods=["GET"])
+def accounts_search():
+    if not accounts_db:
+        return jsonify({"ok": False, "error": "accounts DB unavailable"}), 500
+    try:
+        rows = accounts_db.search(q=request.args.get("q", ""),
+                                  branch=request.args.get("branch", ""),
+                                  limit=int(request.args.get("limit", 50)))
+        return jsonify({"ok": True, "accounts": rows, "total": accounts_db.count()})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
+
+
+@app.route("/api/receipts/accounts/sync", methods=["POST"])
+def accounts_sync():
+    """Pull new/changed accounts from Priority ACCOUNTS (incremental via UDATE).
+    POST with ?full=1 to re-pull the whole chart of accounts."""
+    if not accounts_db:
+        return jsonify({"ok": False, "error": "accounts DB unavailable"}), 500
+    try:
+        full = (request.args.get("full") or "").lower() in ("1", "true", "yes")
+        last = "" if full else accounts_db.get_last_udate()
+        sel = "ACCNAME,ACCDES,BRANCHNAME,BRANCHDES,TRIALBALCODE,TRIALBALDES,UDATE"
+        # Priority caps a single OData response at 9999 rows and returns NO
+        # @odata.nextLink, so page manually with $skip/$top. Order by ACCNAME
+        # (the unique key) so $skip paging is stable (no tie skips/dupes).
+        PAGE = 5000
+        synced = 0
+        max_udate = last or ""
+        offset = 0
+        while offset <= 500000:
+            url = (f"{_prio_url()}/ACCOUNTS?$select={sel}&$orderby=ACCNAME"
+                   f"&$top={PAGE}&$skip={offset}"
+                   + (f"&$filter=UDATE gt {last}" if last else ""))
+            r = http_requests.get(url, headers=_PRIO_READ_HEADERS, auth=_prio_auth(),
+                                  timeout=90, verify=False)
+            r.raise_for_status()
+            batch = r.json().get("value", [])
+            for a in batch:
+                accounts_db.upsert(
+                    accname=a.get("ACCNAME", ""),
+                    accdes=a.get("ACCDES", ""),
+                    branch_code=(a.get("BRANCHNAME") or "").strip() or "000",
+                    branch_des=(a.get("BRANCHDES") or "").strip(),
+                    tb_code=(a.get("TRIALBALCODE") or "").strip(),
+                    tb_des=(a.get("TRIALBALDES") or "").strip(),
+                    udate=a.get("UDATE", ""),
+                )
+                synced += 1
+                u = a.get("UDATE") or ""
+                if u > max_udate:
+                    max_udate = u
+            if len(batch) < PAGE:
+                break
+            offset += PAGE
+        if max_udate:
+            accounts_db.set_last_udate(max_udate)
+        return jsonify({"ok": True, "synced": synced, "total": accounts_db.count(),
+                        "last_udate": max_udate, "full": full})
+    except http_requests.exceptions.HTTPError as e:
+        try:
+            detail = e.response.json()
+        except Exception:
+            detail = str(e)
+        return jsonify({"ok": False, "error": str(e), "detail": detail}), 500
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
