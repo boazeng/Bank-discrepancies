@@ -1287,29 +1287,7 @@ def bank_line_create_transfer():
         if not details:
             details = "תשלום"
 
-        wtax_percent = float(data.get("wtax_percent") or 0)
-        if not wtax_percent:
-            try:
-                acc_safe = accname.replace("'", "")
-                fncsup_resp = http_requests.get(
-                    f"{_prio_url()}/FNCSUP?$filter=ACCNAME eq '{acc_safe}'&$select=WTAXPERCENT&$top=1",
-                    headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=10, verify=False,
-                )
-                if fncsup_resp.ok:
-                    fncsup_rows = fncsup_resp.json().get("value", [])
-                    if fncsup_rows:
-                        wtax_percent = fncsup_rows[0].get("WTAXPERCENT") or 0
-            except Exception as wtax_err:
-                logger.warning(f"Could not fetch WTAXPERCENT for {accname}: {wtax_err}")
-
-        # amount is the NET bank transfer; QPRICE must be the gross (before withholding).
-        if wtax_percent:
-            gross_amount = round(amount / (1 - wtax_percent / 100), 2)
-            wtax_amount  = round(gross_amount - amount, 2)
-        else:
-            gross_amount = amount
-            wtax_amount  = 0
-
+        # Step 1: create QINVOICES with amount as-is; Priority fills WTAXPERCENT from supplier settings
         payload = {
             "ACCNAME":      accname,
             "IVDATE":       ivdate,
@@ -1317,10 +1295,8 @@ def bank_line_create_transfer():
             "BRANCHNAME":   branchname,
             "CASHNAME":     cashname,
             "DETAILS":      details,
-            "QPRICE":       gross_amount,
+            "QPRICE":       amount,
             "FNCITEMSFLAG": "Y",
-            "WTAXPERCENT":  wtax_percent,
-            "WTAX":         wtax_amount,
         }
         logger.info(f"bank_line_create_transfer QINVOICES payload: {payload}")
 
@@ -1332,12 +1308,46 @@ def bank_line_create_transfer():
             logger.error(f"QINVOICES POST {resp.status_code}: {resp.text[:500]}")
         resp.raise_for_status()
         result = resp.json()
-        ivnum = result.get("IVNUM", "")
-        debit = result.get("DEBIT", "D")
+        ivnum  = result.get("IVNUM", "")
+        debit  = result.get("DEBIT", "D")
         ivtype = result.get("IVTYPE", "Q")
 
+        gross_amount = amount
         if ivnum:
             q_key = f"IVNUM='{ivnum}',IVTYPE='{ivtype}',DEBIT='{debit}'"
+
+            # Step 2: read back WTAXPERCENT that Priority filled from supplier settings
+            try:
+                read_resp = http_requests.get(
+                    f"{_prio_url()}/QINVOICES({q_key})?$select=WTAXPERCENT",
+                    headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=10, verify=False,
+                )
+                wtax_percent = 0
+                if read_resp.ok:
+                    wtax_percent = read_resp.json().get("WTAXPERCENT") or 0
+                logger.info(f"QINVOICES {ivnum} WTAXPERCENT from Priority: {wtax_percent}")
+            except Exception as e:
+                wtax_percent = 0
+                logger.warning(f"Could not read WTAXPERCENT for {ivnum}: {e}")
+
+            # Step 3: if withholding applies, recalculate gross and patch QPRICE
+            if wtax_percent:
+                gross_amount = round(amount / (1 - wtax_percent / 100), 2)
+                wtax_amount  = round(gross_amount - amount, 2)
+                try:
+                    patch_resp = http_requests.patch(
+                        f"{_prio_url()}/QINVOICES({q_key})",
+                        json={"QPRICE": gross_amount, "WTAX": wtax_amount},
+                        headers=_PRIO_WRITE_HEADERS, auth=_prio_auth(), timeout=15, verify=False,
+                    )
+                    if not patch_resp.ok:
+                        logger.warning(f"QINVOICES PATCH {patch_resp.status_code}: {patch_resp.text[:300]}")
+                    else:
+                        logger.info(f"QINVOICES {ivnum} QPRICE patched to {gross_amount} (wtax {wtax_amount})")
+                except Exception as e:
+                    logger.warning(f"Could not patch QPRICE for {ivnum}: {e}")
+
+            # Step 4: post HFNCITEMS with gross amount
             hfnc_resp = http_requests.post(
                 f"{_prio_url()}/QINVOICES({q_key})/HFNCITEMS_SUBFORM",
                 json={"ACCNAME": accname, "DEBIT": gross_amount, "DETAILS": details},
