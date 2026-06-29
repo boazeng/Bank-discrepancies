@@ -1134,12 +1134,12 @@ export default function BankPage({ mode = 'bank' }) {
 
           return (
           <>
-            {/* ── Section 1: תנועות שטרם נרשמו ── */}
+            {/* ── Section 1: תנועות פתוחות בבנק ── */}
             <section className="receipts-section">
               <div className="receipts-section-header">
                 <h2 style={{cursor:'pointer', userSelect:'none', display:'flex', alignItems:'center', gap:8}} onClick={() => setUnmatchedOpen(o => !o)}>
                   <span style={{fontSize:11, color:'#9ca3af', fontWeight:400}}>{unmatchedOpen ? '▼' : '▶'}</span>
-                  תנועות שטרם נרשמו
+                  תנועות פתוחות בבנק
                   <span className="receipts-tab-badge" style={{background:'#3b82f6', color:'#fff', marginRight:4}}>
                     {mode === 'credit' ? creditOnly.length : bankOnly.length}
                   </span>
