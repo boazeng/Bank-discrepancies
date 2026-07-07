@@ -652,7 +652,7 @@ def bank_line_create_receipt():
             except Exception as _pe:
                 logger.warning(f"save_pattern failed: {_pe}")
 
-        _launch_bank_recon(priority_ivnum, cashname, txn_id, label="receipt")
+        _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type=doc_type, label="receipt")
 
         return jsonify({"ok": True, "priority_ivnum": priority_ivnum})
 
@@ -918,7 +918,7 @@ def bank_line_create_invoice_receipt():
         processed.add(txn_id)
         _save_processed_txns(processed)
 
-        _launch_bank_recon(priority_ivnum, cashname, txn_id, label="invoice_receipt")
+        _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type="invoice_receipt", label="invoice_receipt")
 
         return jsonify({"ok": True, "priority_ivnum": priority_ivnum})
 
@@ -1098,6 +1098,74 @@ def _launch_bank_recon(journal_fncnum, cashname, bank_fncnum="", label=""):
         threading.Thread(target=_run, daemon=True).start()
     except Exception as ex:
         logger.warning(f"bank_recon launch failed [{label}]: {ex}")
+
+
+def _launch_close_and_recon(priority_ivnum, cashname, bank_txn_id, doc_type="receipt", label=""):
+    """Finalize a draft receipt then run bank reconciliation — all in a background thread.
+
+    Runs close_receipt.js (or close_einvoice.js) first to ensure a real FNCNUM exists
+    before CREDITRECONSP tries to find a matching journal entry.
+    """
+    if not cashname:
+        return
+    try:
+        import threading
+        script_dir = os.path.join(os.path.dirname(__file__), "close_receipt")
+        tag = label or f"close-recon({priority_ivnum})"
+        close_script = "close_einvoice.js" if doc_type == "invoice_receipt" else "close_receipt.js"
+
+        def _run():
+            fncnum = ""
+            rc_ivnum = ""
+            # Step 1: finalize the draft
+            try:
+                r = _node_run(script_dir, [close_script, priority_ivnum], timeout=90)
+                out = (r.stdout or b"").decode("utf-8", errors="replace").strip()
+                err = (r.stderr or b"").decode("utf-8", errors="replace").strip()
+                data = json.loads(out) if out else {}
+                fncnum   = data.get("fncnum")   or ""
+                rc_ivnum = data.get("rc_ivnum") or data.get("final_ivnum") or ""
+                if err:
+                    logger.info(f"{close_script} [{tag}] stderr: {err}")
+                logger.info(f"{close_script} [{tag}]: ok={data.get('ok')} fncnum={fncnum} rc={rc_ivnum}")
+                # Update DB record to closed status
+                if bank_txn_id:
+                    try:
+                        records = receipts_db.list_all()
+                        updated = False
+                        for rec in records:
+                            if rec.get("fncnum") == bank_txn_id and rec.get("status") in ("pending", "approved"):
+                                receipts_db._save_receipt({
+                                    **rec,
+                                    "status":      "closed",
+                                    "closed_at":   _now_il().isoformat(),
+                                    "fncnum":      fncnum or bank_txn_id,
+                                    "bank_fncnum": bank_txn_id,
+                                    "rc_ivnum":    rc_ivnum or priority_ivnum,
+                                })
+                                updated = True
+                                break
+                        if updated:
+                            logger.info(f"close_and_recon [{tag}]: DB record updated to closed")
+                    except Exception as _dbe:
+                        logger.warning(f"close_and_recon [{tag}] DB update failed (non-fatal): {_dbe}")
+            except Exception as ex:
+                logger.warning(f"{close_script} [{tag}] error: {ex}")
+            # Step 2: run bank reconciliation with the real journal FNCNUM
+            try:
+                r2 = _node_run(script_dir, ["bank_recon.js",
+                               fncnum or priority_ivnum, cashname, bank_txn_id or ""], timeout=120)
+                out2 = (r2.stdout or b"").decode("utf-8", errors="replace").strip()
+                err2 = (r2.stderr or b"").decode("utf-8", errors="replace").strip()
+                logger.info(f"bank_recon [{tag}] stdout: {out2}")
+                if err2:
+                    logger.info(f"bank_recon [{tag}] stderr: {err2}")
+            except Exception as ex:
+                logger.warning(f"bank_recon [{tag}] error: {ex}")
+
+        threading.Thread(target=_run, daemon=True).start()
+    except Exception as ex:
+        logger.warning(f"close_and_recon launch failed [{label}]: {ex}")
 
 
 @app.route("/api/receipts/bank-line/create-journal", methods=["POST"])

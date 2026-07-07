@@ -151,9 +151,11 @@ async function main() {
   }
 
   // Step 5: CREDITRECONSP (התאמה אוטומטית — basic bank matching) + CLOSECREDITRECONSP
-  // This is the primary reconciliation path.
-  // BANKRECONSP manual row marking is skipped — the form requires CASHNAME context
-  // that the SDK cannot set, so auto-matching via CREDITRECONSP is the reliable approach.
+  // BANKRECONSP manual row marking is not usable — the form requires CASHNAME context
+  // that the Priority SDK cannot set when opening the form standalone. The only working
+  // approach is CREDITRECONSP (option 1 = basic bank matching), which finds pairs by
+  // amount + date + cashname and populates an internal work surface, then
+  // CLOSECREDITRECONSP finalises those pairs and updates BANKLINESA.ERECONNUM.
   process.stderr.write('Running CREDITRECONSP (bank auto-match) + CLOSECREDITRECONSP\n');
   try {
     // CREDITRECONSP: choose option 1 = "התאמת בנק בסיסית" (basic bank matching)
@@ -184,23 +186,23 @@ async function main() {
 
     // CLOSECREDITRECONSP: close auto-matched pairs
     // Steps: message("להמשיך בפעולה?") → inputFields(USER=<default>) → end
+    // Note: "לא קיימים שורות" before end = no pairs found (CREDITRECONSP had nothing to match)
     let step2 = await withTimeout(
       priority.procStart('CLOSECREDITRECONSP', 'P', null, company),
       30000, 'procStart CLOSECREDITRECONSP'
     );
     let d2 = 0;
+    let noRowsFound = false;
     while (step2 && d2 < 10) {
       const t = step2.type;
       process.stderr.write(`  CLOSECREDITRECONSP[${d2}] type=${t} msg=${(step2.message || '').slice(0, 80)}\n`);
-      if (t === 'end' || t === 'finished') { reconOk = true; break; }
+      if (t === 'end' || t === 'finished') { reconOk = !noRowsFound; break; }
       if (t === 'message' && step2.proc?.message) {
-        // "לא קיימים שורות במסך" = nothing to close (CREDITRECONSP found 0 pairs)
         if ((step2.message || '').includes('לא קיימים')) {
+          noRowsFound = true;
           process.stderr.write('  CLOSECREDITRECONSP: no rows to close (CREDITRECONSP found 0 pairs)\n');
-          step2 = await withTimeout(step2.proc.message(1), 30000, `CLOSECREDITRECONSP.msg${d2}`);
-        } else {
-          step2 = await withTimeout(step2.proc.message(1), 30000, `CLOSECREDITRECONSP.msg${d2}`);
         }
+        step2 = await withTimeout(step2.proc.message(1), 30000, `CLOSECREDITRECONSP.msg${d2}`);
       } else if (t === 'inputFields' && step2.proc?.inputFields) {
         // USER field (ID=18 by default) — submit with the pre-filled default value
         const fields = (step2.input?.EditFields || []).map(f => ({
@@ -216,6 +218,24 @@ async function main() {
     process.stderr.write(`CLOSECREDITRECONSP done reconOk=${reconOk}\n`);
   } catch (e) {
     process.stderr.write(`CREDITRECONSP/CLOSECREDITRECONSP (non-fatal): ${e.message}\n`);
+  }
+
+  // Step 6: Verify reconciliation by checking BANKLINESA.ERECONNUM > 0 for our specific line
+  if (bpnuma) {
+    try {
+      const verResp = await withTimeout(
+        fetch(`${odataBase}/BANKLINESA?$filter=BPNUMA eq '${bpnuma}' and CASHNAME eq '${cashname}' and ERECONNUM gt 0&$select=BPNUMA,ERECONNUM&$top=1`, { headers: readHeaders }),
+        10000, 'verify BANKLINESA ERECONNUM'
+      );
+      if (verResp.ok) {
+        const verData = await verResp.json();
+        const verified = (verData.value || []).length > 0;
+        process.stderr.write(`Verification BPNUMA=${bpnuma} CASHNAME=${cashname} reconciled=${verified}\n`);
+        if (verified) reconOk = true;
+      }
+    } catch (e) {
+      process.stderr.write(`Verification (non-fatal): ${e.message}\n`);
+    }
   }
 
   process.stdout.write(JSON.stringify({ ok: true, journalFncnum, bankFncnum, cashname, fncrefSet, reconOk }));
