@@ -1489,11 +1489,14 @@ def journal_finalize(priority_fncnum):
     import subprocess, shutil
     try:
         data = request.get_json(force=True) or {}
-        manual_fncnum = (data.get("final_fncnum") or "").strip()
+        manual_fncnum    = (data.get("final_fncnum") or "").strip()
+        request_cashname = (data.get("cashname")     or "").strip()
 
         if manual_fncnum:
             if action_queue_db:
                 action_queue_db.mark_final_by_priority_fncnum(priority_fncnum, manual_fncnum)
+            if request_cashname:
+                _launch_bank_recon(manual_fncnum, request_cashname, "", label="journal-manual-final")
             return jsonify({"ok": True, "fncnum": manual_fncnum, "draft_fncnum": priority_fncnum})
 
         queue_item_early = action_queue_db.get_by_priority_fncnum(priority_fncnum) if action_queue_db else None
@@ -1601,7 +1604,7 @@ def journal_finalize(priority_fncnum):
                     logger.warning(f"post-close FNCTRANS lookup failed: {_e}")
 
         queue_item = action_queue_db.get_by_priority_fncnum(priority_fncnum) if action_queue_db else None
-        recon_cashname = (queue_item or {}).get("cashname", "")
+        recon_cashname = request_cashname or (queue_item or {}).get("cashname", "")
 
         if action_queue_db:
             action_queue_db.mark_final_by_priority_fncnum(priority_fncnum, final_fncnum)

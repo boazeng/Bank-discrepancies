@@ -629,11 +629,12 @@ export default function BankPage({ mode = 'bank' }) {
     }
   }
 
-  async function finalizeJournal(priorityFncnum) {
+  async function finalizeJournal(priorityFncnum, cashname) {
     setFinalizingJournal(priorityFncnum)
     try {
       const resp = await fetch(`${API}/api/receipts/journal/${encodeURIComponent(priorityFncnum)}/finalize`, {
-        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({}),
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cashname: cashname || '' }),
       })
       const data = await resp.json()
       if (data.ok) {
@@ -1397,7 +1398,7 @@ export default function BankPage({ mode = 'bank' }) {
                                 </button>
                               ) : (
                                 <button
-                                  onClick={() => finalizeJournal(item.priority_fncnum)}
+                                  onClick={() => finalizeJournal(item.priority_fncnum, item.cashname)}
                                   disabled={finalizingJournal === item.priority_fncnum}
                                   style={{ fontSize: 11, padding: '2px 8px', cursor: 'pointer',
                                            background: '#fff7ed', border: '1px solid #b45309',

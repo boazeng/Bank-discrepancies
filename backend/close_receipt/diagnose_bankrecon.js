@@ -34,63 +34,62 @@ async function main() {
 
   console.log('=== formStart BANKRECONSP ===');
   const form = await priority.formStart('BANKRECONSP', null, null, company);
-  console.log('Form object keys:', Object.keys(form || {}));
+  // ── columns = field names ──────────────────────────────────────
+  console.log('\n=== form.columns ===');
+  console.log(JSON.stringify(form.columns, null, 2));
 
-  // ── dump current rows ──────────────────────────────────────────
-  console.log('\n=== getRows(0) ===');
-  try {
-    const rows = await form.getRows(0);
-    console.log('Type:', typeof rows, Array.isArray(rows) ? 'array' : '');
-    console.log('Top-level keys:', Object.keys(rows || {}));
-    const arr = Array.isArray(rows) ? rows : (rows?.Rows || rows?.rows || rows?.value || []);
-    console.log('Row count:', arr.length);
-    arr.slice(0, 5).forEach((r, i) => {
-      console.log(`\nRow[${i}]:`, JSON.stringify(r, null, 2));
-    });
-  } catch (e) {
-    console.log('getRows error:', e.message);
-  }
+  // ── subforms list ──────────────────────────────────────────────
+  console.log('\n=== form.subForms ===');
+  console.log(JSON.stringify(form.subForms, null, 2));
 
-  // ── try activating row 0 to see its fields ────────────────────
-  console.log('\n=== activateRow(0) ===');
-  try {
-    const ar = await form.activateRow(0);
-    console.log('activateRow(0):', JSON.stringify(ar, null, 2).slice(0, 1000));
-  } catch (e) {
-    console.log('activateRow(0) error:', e.message);
-  }
-
-  // ── try newRow to see what fields Priority expects ─────────────
-  console.log('\n=== newRow() ===');
+  // ── newRow then fieldUpdate to see real field names ────────────
+  console.log('\n=== newRow() + fieldUpdate probing ===');
   try {
     const nr = await form.newRow();
-    console.log('newRow():', JSON.stringify(nr, null, 2).slice(0, 1000));
+    console.log('newRow():', JSON.stringify(nr));
+
+    // Try every plausible field name, log what Priority says
+    const candidates = [
+      'CASHNAME', 'BOOKNUM', 'BANKNUM', 'BPNUMA', 'FNCNUM',
+      'FRST_BOOKNUM', 'SCND_IVNUM', 'RECON', 'RECONNUM',
+      'BOOKLINE', 'BANKLINE', 'IVNUM', 'DETAILS',
+    ];
+    for (const field of candidates) {
+      try {
+        const r = await form.fieldUpdate(field, 'TEST');
+        console.log(`  fieldUpdate(${field}): OK —`, JSON.stringify(r).slice(0, 120));
+      } catch (e) {
+        console.log(`  fieldUpdate(${field}): ${e.message.slice(0, 80)}`);
+      }
+    }
     await form.undo().catch(() => {});
   } catch (e) {
-    console.log('newRow() error:', e.message);
-    await form.undo().catch(() => {});
+    console.log('newRow error:', e.message);
   }
 
-  // ── list available subforms ────────────────────────────────────
-  console.log('\n=== openForm (subform discovery) ===');
-  const subformCandidates = [
+  // ── startSubForm discovery ─────────────────────────────────────
+  console.log('\n=== startSubForm discovery ===');
+  const sfCandidates = [
     'BANKRECONSP_BANK', 'BANKRECONSP_BOOKS', 'BANKRECONSP_FNCTRANS',
     'BANKRECONLINES', 'BANKRECLINES', 'BANKRECONSP_BANKLINES',
     'BANKRECONSP_BOOKLIST', 'BANKRECONSP_BANKLIST',
+    'FNCTRANS', 'BANKLINESA',
   ];
-  for (const sf of subformCandidates) {
+  for (const sf of sfCandidates) {
     try {
-      const sub = await form.openForm(sf);
-      console.log(`  openForm(${sf}) OK — keys:`, Object.keys(sub || {}));
+      const sub = await form.startSubForm(sf);
+      console.log(`  startSubForm(${sf}) OK`);
+      if (sub && sub.columns) console.log(`    columns:`, JSON.stringify(sub.columns).slice(0, 300));
       try {
         const sr = await sub.getRows(0);
-        const sarr = Array.isArray(sr) ? sr : (sr?.Rows || sr?.rows || sr?.value || []);
-        console.log(`    rows: ${sarr.length}`);
-        if (sarr.length > 0) console.log(`    Row[0]:`, JSON.stringify(sarr[0]).slice(0, 300));
+        const sarr = Array.isArray(sr) ? sr : Object.values(sr || {})[0] || [];
+        console.log(`    rows: ${Array.isArray(sarr) ? sarr.length : JSON.stringify(sarr).slice(0,100)}`);
+        if (Array.isArray(sarr) && sarr.length > 0)
+          console.log(`    Row[0]:`, JSON.stringify(sarr[0]).slice(0, 300));
       } catch (e2) { console.log(`    getRows: ${e2.message}`); }
       await sub.endCurrentForm(false).catch(() => {});
     } catch (e) {
-      console.log(`  openForm(${sf}): ${e.message}`);
+      console.log(`  startSubForm(${sf}): ${e.message.slice(0, 80)}`);
     }
   }
 

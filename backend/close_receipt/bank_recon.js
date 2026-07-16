@@ -220,17 +220,18 @@ async function main() {
     process.stderr.write(`CREDITRECONSP/CLOSECREDITRECONSP (non-fatal): ${e.message}\n`);
   }
 
-  // Step 6: Verify reconciliation by checking BANKLINESA.ERECONNUM > 0 for our specific line
-  if (bpnuma) {
+  // Step 6: Verify reconciliation by checking BANKLINESA.ERECONNUM > 0 for this specific line.
+  // Uses BANKPAGE+KLINE composite key (unique) rather than BPNUMA (not unique across pages).
+  if (bankPage && kline) {
     try {
       const verResp = await withTimeout(
-        fetch(`${odataBase}/BANKLINESA?$filter=BPNUMA eq '${bpnuma}' and CASHNAME eq '${cashname}' and ERECONNUM gt 0&$select=BPNUMA,ERECONNUM&$top=1`, { headers: readHeaders }),
+        fetch(`${odataBase}/BANKLINESA(BANKPAGE=${bankPage},KLINE=${kline})?$select=BPNUMA,ERECONNUM`, { headers: readHeaders }),
         10000, 'verify BANKLINESA ERECONNUM'
       );
       if (verResp.ok) {
         const verData = await verResp.json();
-        const verified = (verData.value || []).length > 0;
-        process.stderr.write(`Verification BPNUMA=${bpnuma} CASHNAME=${cashname} reconciled=${verified}\n`);
+        const verified = (verData.ERECONNUM || 0) > 0;
+        process.stderr.write(`Verification BANKPAGE=${bankPage} KLINE=${kline} ERECONNUM=${verData.ERECONNUM} reconciled=${verified}\n`);
         if (verified) reconOk = true;
       }
     } catch (e) {
