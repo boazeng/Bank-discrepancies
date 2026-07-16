@@ -1130,9 +1130,12 @@ export default function BankPage({ mode = 'bank' }) {
                 <td>
                   <div>{txn.DETAILS}</div>
                   {match && (
-                    <div style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
-                      <div>
-                        {mStyle?.label} ← <strong>
+                    <div style={{ fontSize: 11, marginTop: 2 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, flexWrap: 'wrap' }}>
+                        <span className="receipts-action-label" style={{ color: mStyle?.color, background: mStyle?.bg }}>
+                          {mStyle?.label}
+                        </span>
+                        ← <strong>
                           {match.accname}{match.accdes ? ` – ${match.accdes}` : ''}
                         </strong>
                         {(match.action === 'receipt' || match.action === 'invoice_receipt')
