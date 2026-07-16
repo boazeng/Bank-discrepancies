@@ -1091,6 +1091,9 @@ export default function BankPage({ mode = 'bank' }) {
                   {match && (
                     <div style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
                       {mStyle?.label} ← <strong>{match.accdes || match.accname}</strong>
+                      {match.open_invoices?.length === 1 && (
+                        <> · תסגור חשבונית {match.open_invoices[0].IVNUM}</>
+                      )}
                     </div>
                   )}
                 </td>

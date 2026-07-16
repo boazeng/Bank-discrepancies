@@ -293,6 +293,20 @@ def _fetch_receipt_amount_index():
 
 
 def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0):
+    """Wraps _find_auto_match_core(): when the suggestion is a plain receipt
+    (TINVOICES — invoice_receipt/EINVOICES don't consume open invoices), also
+    check for a single unambiguous open invoice at this exact amount so the
+    one-click confirm closes it instead of just parking the payment as an
+    unlinked receipt."""
+    match = _find_auto_match_core(details, direction, cashname, branchname, bank_gl, amount)
+    if match and match.get("action") == "receipt" and match.get("accname") and amount:
+        invoices = _find_receipt_open_invoice(match["accname"], amount, branchname)
+        if invoices:
+            match["open_invoices"] = invoices
+    return match
+
+
+def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="", amount=0):
     """Suggest an action+account for a bank line from past history.
 
     Tier 1 — transaction_patterns_db: exact/substring match on the literal
@@ -1539,6 +1553,7 @@ def bank_line_quick_confirm():
             "save_template": True,
             # receipt extras
             "doc_type": action if action in ("receipt", "invoice_receipt") else "receipt",
+            "open_invoices": pattern.get("open_invoices", []),
         }
 
         with app.test_client() as tc:
@@ -2306,41 +2321,59 @@ def customer_search():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
+def _query_open_invoices(accname, branchname=""):
+    """Open (unreconciled) CINVOICES for a customer. Shared by the open-invoices
+    endpoint and the auto-match receipt tier's invoice-closing suggestion."""
+    base_accname = accname.split("-")[0] if "-" in accname else accname
+    flt = f"CUSTNAME eq '{base_accname}' and STATDES ne 'מבוטלת'"
+
+    filters_to_try = []
+    if branchname and branchname not in ("000", "all"):
+        branch_safe = branchname.replace("'", "")
+        filters_to_try.append(f"{flt} and BRANCHNAME eq '{branch_safe}'")
+    filters_to_try.append(flt)
+
+    invoices = []
+    for f_try in filters_to_try:
+        r = http_requests.get(
+            f"{_prio_url()}/CINVOICES?$filter={f_try}"
+            "&$select=IVNUM,CUSTNAME,CDES,IVDATE,TOTPRICE,STATDES,BRANCHNAME,IVRECONDATE"
+            "&$orderby=IVDATE desc&$top=50",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20,
+        )
+        r.raise_for_status()
+        all_inv = r.json().get("value", [])
+        invoices = [inv for inv in all_inv if not inv.get("IVRECONDATE")]
+        if invoices:
+            break
+    return invoices
+
+
+def _find_receipt_open_invoice(accname, amount, branchname):
+    """An open invoice to auto-attach to a suggested receipt, so the one-click
+    confirm closes it too — only when exactly one open invoice for this
+    customer matches the bank amount. Ambiguous (0 or 2+) stays unattached;
+    the user picks manually via the receipt modal instead."""
+    try:
+        invoices = _query_open_invoices(accname, branchname)
+    except Exception as _e:
+        logger.warning(f"_find_receipt_open_invoice({accname}) failed: {_e}")
+        return []
+    matches = [inv for inv in invoices if abs(float(inv.get("TOTPRICE") or 0) - amount) < 0.01]
+    return matches if len(matches) == 1 else []
+
+
 @app.route("/api/receipts/open-invoices", methods=["GET"])
 def receipts_open_invoices():
     """Find CINVOICES matching customer + amount for receipt modal auto-matching."""
     try:
         accname    = (request.args.get("accname")    or "").strip()
-        amount_str = (request.args.get("amount")     or "").strip()
         branchname = (request.args.get("branchname") or "").strip()
 
         if not accname:
             return jsonify({"ok": True, "invoices": []})
 
-        base_accname = accname.split("-")[0] if "-" in accname else accname
-
-        flt = f"CUSTNAME eq '{base_accname}' and STATDES ne 'מבוטלת'"
-
-        filters_to_try = []
-        if branchname and branchname not in ("000", "all"):
-            branch_safe = branchname.replace("'", "")
-            filters_to_try.append(f"{flt} and BRANCHNAME eq '{branch_safe}'")
-        filters_to_try.append(flt)
-
-        invoices = []
-        for f_try in filters_to_try:
-            r = http_requests.get(
-                f"{_prio_url()}/CINVOICES?$filter={f_try}"
-                "&$select=IVNUM,CUSTNAME,CDES,IVDATE,TOTPRICE,STATDES,BRANCHNAME,IVRECONDATE"
-                "&$orderby=IVDATE desc&$top=50",
-                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20,
-            )
-            r.raise_for_status()
-            all_inv = r.json().get("value", [])
-            invoices = [inv for inv in all_inv if not inv.get("IVRECONDATE")]
-            if invoices:
-                break
-
+        invoices = _query_open_invoices(accname, branchname)
         return jsonify({"ok": True, "invoices": invoices})
     except Exception as e:
         logger.warning(f"open-invoices error: {e}")
