@@ -2149,45 +2149,71 @@ _all_customers_cache = {"data": None, "ts": 0}
 _ALL_CACHE_TTL = 600  # 10 minutes
 
 
-@app.route("/api/receipts/all-suppliers", methods=["GET"])
-def all_suppliers_list():
-    """Return accounts for the transfer-modal dropdown, served from the local
-    SQLite cache so the modal opens instantly (no Priority round-trip). Optional
-    ?branch=<code> returns only that branch's accounts (number ends with
-    '-<branch>'; no branch / 000 = main company). The supplier withholding %
-    (wtaxpercent) is intentionally 0 here: it is read back from QINVOICES (filled
-    by Priority from the supplier's settings) at create-transfer time, so the
-    list does not need it. Falls back to live Priority FNCSUP only if the local
-    cache is empty (note: FNCSUP is currently not API-enabled in Priority)."""
+def _refresh_suppliers_cache():
+    """(Re)fetch the base SUPNAME/SUPDES supplier list from Priority if the
+    10-min in-memory cache is stale. Returns the cached list (possibly empty)."""
     import time
-    branch = (request.args.get("branch") or "").strip()
-    # --- Primary: local SQLite cache ---
-    try:
-        if accounts_db.count() > 0:
-            rows = accounts_db.search("", limit=3000, acc_suffix=branch)
-            accounts = [
-                {"accname": r["accname"], "accdes": r.get("accdes", ""), "wtaxpercent": 0}
-                for r in rows
-            ]
-            return jsonify({"ok": True, "accounts": accounts, "from_cache": "db"})
-    except Exception:
-        pass  # fall through to legacy live Priority
-    try:
-        now = time.time()
-        if _all_suppliers_cache["data"] is not None and (now - _all_suppliers_cache["ts"]) < _ALL_CACHE_TTL:
-            return jsonify({"ok": True, "accounts": _all_suppliers_cache["data"], "from_cache": True})
+    now = time.time()
+    if _all_suppliers_cache["data"] is None or (now - _all_suppliers_cache["ts"]) >= _ALL_CACHE_TTL:
         r = http_requests.get(
-            f"{_prio_url()}/FNCSUP?$select=ACCNAME,SUPDES,WTAXPERCENT&$top=2000",
+            f"{_prio_url()}/SUPPLIERS?$select=SUPNAME,SUPDES&$top=5000",
             headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
         )
         r.raise_for_status()
-        accounts = [
-            {"accname": s["ACCNAME"], "accdes": s.get("SUPDES", ""), "wtaxpercent": s.get("WTAXPERCENT") or 0}
+        base = [
+            {"supname": s["SUPNAME"], "supdes": s.get("SUPDES", "")}
             for s in r.json().get("value", [])
-            if s.get("ACCNAME")
+            if s.get("SUPNAME") and s["SUPNAME"] != "-"
         ]
-        _all_suppliers_cache["data"] = accounts
+        _all_suppliers_cache["data"] = base
         _all_suppliers_cache["ts"] = now
+    return _all_suppliers_cache["data"] or []
+
+
+def _refresh_customers_cache():
+    """(Re)fetch the base CUSTNAME/CUSTDES/BRANCHNAME customer list from
+    Priority if the 10-min in-memory cache is stale. Returns the cached list
+    (possibly empty). Priority's OData contains() is unreliable for Hebrew and
+    numeric search terms on this tenant (returns 501), so customer search is
+    done by filtering this cached list in Python rather than querying live."""
+    import time
+    now = time.time()
+    if _all_customers_cache["data"] is None or (now - _all_customers_cache["ts"]) >= _ALL_CACHE_TTL:
+        r = http_requests.get(
+            f"{_prio_url()}/CUSTOMERS?$select=CUSTNAME,CUSTDES,BRANCHNAME&$top=3000",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
+        )
+        r.raise_for_status()
+        base = [
+            {"custname": s["CUSTNAME"], "custdes": s.get("CUSTDES", ""), "branchname": (s.get("BRANCHNAME") or "").strip()}
+            for s in r.json().get("value", [])
+            if s.get("CUSTNAME") and s["CUSTNAME"] != "-"
+        ]
+        _all_customers_cache["data"] = base
+        _all_customers_cache["ts"] = now
+    return _all_customers_cache["data"] or []
+
+
+@app.route("/api/receipts/all-suppliers", methods=["GET"])
+def all_suppliers_list():
+    """Return supplier accounts (from SUPPLIERS) for the transfer-modal dropdown,
+    cached in memory for 10 min. Optional ?branch=<code> appends that branch as
+    a suffix to every account number: unlike customers, a supplier isn't tied to
+    one home branch in Priority (SUPPLIERS.BRANCHNAME is usually empty) — the
+    branch is a property of the transaction, so it's appended to whichever
+    supplier the user picks, matching the ACCNAME Priority actually expects on
+    QINVOICES (e.g. '60064-102'). The supplier withholding % (wtaxpercent) is
+    intentionally 0 here: it is read back from QINVOICES (filled by Priority
+    from the supplier's settings) at create-transfer time, so the list does not
+    need it."""
+    try:
+        branch = (request.args.get("branch") or "").strip()
+        base = _refresh_suppliers_cache()
+        suffix = f"-{branch}" if (branch and branch != "000") else ""
+        accounts = [
+            {"accname": f"{s['supname']}{suffix}", "accdes": s["supdes"], "wtaxpercent": 0}
+            for s in base
+        ]
         return jsonify({"ok": True, "accounts": accounts})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "accounts": []}), 500
@@ -2195,25 +2221,76 @@ def all_suppliers_list():
 
 @app.route("/api/receipts/all-customers", methods=["GET"])
 def all_customers_list():
-    """Return all customer accounts from CUSTOMERS for dropdown (cached 10 min)."""
-    import time
+    """Return all customer accounts from CUSTOMERS for the receipt / invoice-
+    receipt customer dropdown, cached 10 min. Each customer's own BRANCHNAME
+    becomes the account-number suffix (e.g. '50440-026'), matching the ACCNAME
+    Priority uses on TINVOICES receipts. The picker filters this full list
+    client-side (by branch, then by typed text) rather than querying Priority
+    per keystroke, since Priority's OData contains() is unreliable for Hebrew
+    and numeric search terms on this tenant."""
     try:
-        now = time.time()
-        if _all_customers_cache["data"] is not None and (now - _all_customers_cache["ts"]) < _ALL_CACHE_TTL:
-            return jsonify({"ok": True, "accounts": _all_customers_cache["data"], "from_cache": True})
-        r = http_requests.get(
-            f"{_prio_url()}/CUSTOMERS?$select=CUSTNAME,CDES&$top=500",
-            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20, verify=False,
-        )
-        r.raise_for_status()
+        base = _refresh_customers_cache()
         accounts = [
-            {"accname": s["CUSTNAME"], "accdes": s.get("CDES", "")}
-            for s in r.json().get("value", [])
-            if s.get("CUSTNAME")
+            {
+                "accname":     f"{c['custname']}-{c['branchname']}" if c["branchname"] and c["branchname"] != "000" else c["custname"],
+                "accdes":      c["custdes"],
+                "branchname":  c["branchname"],
+            }
+            for c in base
         ]
-        _all_customers_cache["data"] = accounts
-        _all_customers_cache["ts"] = now
         return jsonify({"ok": True, "accounts": accounts})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e), "accounts": []}), 500
+
+
+@app.route("/api/receipts/search-all-accounts", methods=["GET"])
+def search_all_accounts():
+    """Search GL accounts + customers + suppliers together, for the journal
+    counterpart field (any of the three can be the other side of a journal
+    entry). Each result is tagged 'kind' so the UI can label it."""
+    try:
+        q          = (request.args.get("q") or "").strip()
+        branchname = (request.args.get("branchname") or "").strip()
+        if len(q) < 2:
+            return jsonify({"ok": True, "accounts": []})
+        results = []
+
+        # --- GL accounts (local SQLite cache) ---
+        try:
+            if accounts_db.count() > 0:
+                for r in accounts_db.search(q, limit=20, acc_suffix=branchname):
+                    results.append({"accname": r["accname"], "accdes": r.get("accdes", ""), "kind": "gl"})
+        except Exception:
+            pass
+
+        suffix = f"-{branchname}" if (branchname and branchname != "000") else ""
+
+        # --- Customers (Priority's contains() is unreliable for Hebrew/numeric
+        # terms on this tenant; filter the cached list instead) ---
+        try:
+            q_lower = q.lower()
+            for c in _refresh_customers_cache():
+                if q_lower in c["custname"].lower() or q_lower in c["custdes"].lower():
+                    cbranch = c["branchname"]
+                    accname = f"{c['custname']}-{cbranch}" if cbranch and cbranch != "000" else c["custname"]
+                    results.append({"accname": accname, "accdes": c["custdes"], "kind": "customer"})
+                    if len(results) >= 60:
+                        break
+        except Exception:
+            pass
+
+        # --- Suppliers (SUPPLIERS doesn't support contains(); filter the cached list) ---
+        try:
+            q_lower = q.lower()
+            for s in _refresh_suppliers_cache():
+                if q_lower in s["supname"].lower() or q_lower in s["supdes"].lower():
+                    results.append({"accname": f"{s['supname']}{suffix}", "accdes": s["supdes"], "kind": "supplier"})
+                    if len(results) >= 60:
+                        break
+        except Exception:
+            pass
+
+        return jsonify({"ok": True, "accounts": results[:60]})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e), "accounts": []}), 500
 

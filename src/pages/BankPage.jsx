@@ -104,10 +104,6 @@ export default function BankPage({ mode = 'bank' }) {
   const [finalizeTransferSaving, setFinalizeTransferSaving] = useState(false)
   const [cancellingAction, setCancellingAction]           = useState(null)
 
-  // Account code autocomplete
-  const [accSuggestions, setAccSuggestions] = useState([])
-  const [accSearching, setAccSearching]     = useState(false)
-
   // Invoice receipt modal state
   const [irModal, setIrModal]         = useState(null)
   const [irDraftInfo, setIrDraftInfo] = useState(null)
@@ -120,6 +116,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [irSending, setIrSending]     = useState(false)
   const [irError, setIrError]         = useState('')
   const [irPrevNote, setIrPrevNote]   = useState('')
+  const [irAccFocused, setIrAccFocused] = useState(false)
 
   // Bank GL settings
   const [showBankGlSettings, setShowBankGlSettings] = useState(false)
@@ -134,14 +131,14 @@ export default function BankPage({ mode = 'bank' }) {
   const [transferSending, setTransferSending]           = useState(false)
   const [transferError, setTransferError]               = useState('')
   const [transferSuccess, setTransferSuccess]           = useState('')
-  const [transferAccSugg, setTransferAccSugg]           = useState([])
-  const [transferAccSearching, setTransferAccSearching] = useState(false)
   const [transferAccFocused, setTransferAccFocused]     = useState(false)
   const [transferDropdownOpen, setTransferDropdownOpen] = useState(false)
   const [transferAccFromSugg, setTransferAccFromSugg]   = useState(false)
 
   // Pre-loaded account lists for dropdowns
   const [allSuppliers, setAllSuppliers] = useState([])
+  const [allCustomers, setAllCustomers] = useState([])
+  const [receiptAccFocused, setReceiptAccFocused] = useState(false)
 
   const loadAll = useCallback(async (d, b, refreshGl, bk) => {
     const daysParam   = d ?? days
@@ -321,12 +318,13 @@ export default function BankPage({ mode = 'bank' }) {
     setModalError('')
     setLastIvnum(null)
     setCustSuggestions([])
-    setAccSuggestions([])
     setOpenInvoices([])
     setSelectedInvoices(new Set())
     setExistingRc(null)
     setDraftInfo(null)
     setFinalizing(false)
+    setReceiptAccFocused(false)
+    loadAllCustomers()
     if (txn.SUM1) {
       setCustSearching(true)
       try {
@@ -555,7 +553,8 @@ export default function BankPage({ mode = 'bank' }) {
     setIrDraftInfo(null)
     setIrFinalizing(false)
     setCustSuggestions([])
-    setAccSuggestions([])
+    setIrAccFocused(false)
+    loadAllCustomers()
 
     if (txn.SUM1) {
       setCustSearching(true)
@@ -652,23 +651,19 @@ export default function BankPage({ mode = 'bank' }) {
     setJournalAccSearching(true)
     try {
       const params = new URLSearchParams({ q, branchname: branchname || '' })
-      const res = await fetch(`${API}/api/receipts/priority-accounts?${params}`).then(r => r.json())
+      const res = await fetch(`${API}/api/receipts/search-all-accounts?${params}`).then(r => r.json())
       if (res.ok) setJournalAccSuggestions(res.accounts || [])
     } catch { /* silent */ } finally {
       setJournalAccSearching(false)
     }
   }
 
-  async function searchAccounts(q, branchname) {
-    if (!q || q.length < 1) { setAccSuggestions([]); return }
-    setAccSearching(true)
+  async function loadAllCustomers() {
+    if (allCustomers.length > 0) return
     try {
-      const params = new URLSearchParams({ q, branchname: branchname || '' })
-      const res = await fetch(`${API}/api/receipts/priority-accounts?${params}`).then(r => r.json())
-      if (res.ok) setAccSuggestions(res.accounts || [])
-    } catch { /* silent */ } finally {
-      setAccSearching(false)
-    }
+      const res = await fetch(`${API}/api/receipts/all-customers`).then(r => r.json())
+      if (res.ok) setAllCustomers(res.accounts || [])
+    } catch { /* silent */ }
   }
 
   async function cancelAction(itemId) {
@@ -863,18 +858,10 @@ export default function BankPage({ mode = 'bank' }) {
     }
   }
 
-  async function searchTransferAcc(q, branchname) {
-    if (!q || q.length < 2) { setTransferAccSugg([]); return }
-    setTransferAccSearching(true)
-    try {
-      const res = await fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(q)}&branchname=${encodeURIComponent(branchname || '')}`).then(r => r.json())
-      setTransferAccSugg((res.accounts || []).slice(0, 6))
-    } catch { /* silent */ } finally { setTransferAccSearching(false) }
-  }
-
   async function loadAllSuppliers(branch) {
-    // Served from the local SQLite cache, branch-filtered — fast, so refetch per
-    // modal open (the branch differs between transactions).
+    // Suppliers aren't tied to one branch in Priority, so the branch (from the
+    // current bank transaction) is appended server-side to every account
+    // number returned — refetch per modal open since it differs per transaction.
     try {
       const res = await fetch(`${API}/api/receipts/all-suppliers?branch=${encodeURIComponent(branch || '')}`).then(r => r.json())
       if (res.ok) { setAllSuppliers(res.accounts || []); setTransferDropdownOpen(true) }
@@ -1145,9 +1132,22 @@ export default function BankPage({ mode = 'bank' }) {
                   <div>{txn.DETAILS}</div>
                   {match && (
                     <div style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
-                      {mStyle?.label} ← <strong>{match.accdes || match.accname}</strong>
-                      {match.open_invoices?.length === 1 && (
-                        <> · תסגור חשבונית {match.open_invoices[0].IVNUM}</>
+                      <div>
+                        {mStyle?.label} ← <strong>{match.accdes || match.accname}</strong>
+                        {(match.open_invoices?.[0]?.CUSTNAME || match.accname) && (
+                          <> · לקוח {match.open_invoices?.[0]?.CUSTNAME || match.accname.split('-')[0]}</>
+                        )}
+                      </div>
+                      {match.open_invoices?.length > 0 && (
+                        <div>
+                          {match.open_invoices.map(inv => (
+                            <span key={inv.IVNUM} style={{ display: 'inline-block', marginLeft: 10 }}>
+                              · תסגור חשבונית {inv.IVNUM}
+                              {inv.IVDATE && <> מתאריך {fmt(inv.IVDATE)}</>}
+                              {inv.TOTPRICE != null && <> ע"ס {fmtAmount(inv.TOTPRICE)}</>}
+                            </span>
+                          ))}
+                        </div>
                       )}
                     </div>
                   )}
@@ -2253,7 +2253,7 @@ export default function BankPage({ mode = 'bank' }) {
                 onBlur={async () => {
                   if (!journalCounterpart.trim() || journalCounterDesc) return
                   try {
-                    const res = await fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(journalCounterpart.trim())}&branchname=${encodeURIComponent(journalModal?.BRANCHNAME || '')}`).then(r => r.json())
+                    const res = await fetch(`${API}/api/receipts/search-all-accounts?q=${encodeURIComponent(journalCounterpart.trim())}&branchname=${encodeURIComponent(journalModal?.BRANCHNAME || '')}`).then(r => r.json())
                     const accs = res.accounts || []
                     const exact = accs.find(a =>
                       a.accname === journalCounterpart.trim() ||
@@ -2288,6 +2288,11 @@ export default function BankPage({ mode = 'bank' }) {
                     >
                       <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
                       {' — '}{a.accdes}
+                      {a.kind && a.kind !== 'gl' && (
+                        <span style={{ marginRight: 6, fontSize: 10, color: '#6b7280', background: '#f3f4f6', borderRadius: 4, padding: '1px 5px' }}>
+                          {a.kind === 'customer' ? 'לקוח' : a.kind === 'supplier' ? 'ספק' : a.kind}
+                        </span>
+                      )}
                     </button>
                   ))}
                 </div>
