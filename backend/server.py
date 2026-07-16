@@ -211,6 +211,19 @@ def _token_overlap_ratio(a, b):
     return len(toks_a & toks_b) / len(toks_a)
 
 
+def _with_branch(acc, branch):
+    """Append the current transaction's branch suffix to a counterpart account,
+    replacing any different branch suffix it may already carry. Account
+    templates/patterns learned from one branch's transaction must never be
+    applied as-is to another branch — e.g. a saved "620-0-109" counterpart
+    must become "620-0-103" for a branch-103 line, not stay stuck on 109."""
+    import re
+    if not branch or branch == "000":
+        return acc
+    base = re.sub(r"-\d{3}$", "", acc)
+    return f"{base}-{branch}"
+
+
 _PRIO_HIST_TTL = 600  # seconds — Priority accounting history barely changes minute to minute
 _prio_journal_hist_cache = {}   # (gl_account, branchname) -> (fetched_at, [entries])
 _prio_receipt_hist_cache = {"fetched_at": 0.0, "index": {}}  # amount(2dp) -> {(accname, accdes)}
@@ -347,7 +360,10 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
 
     Tier 1 — transaction_patterns_db: exact/substring match on the literal
     DETAILS text (cheap, safe — recurring bank fees use byte-identical
-    wording every time).
+    wording every time). Ignores cashname/branch by design (same wording in
+    different banks should reuse), so a journal accname carries whichever
+    branch first taught the pattern — _with_branch() re-suffixes it to the
+    current line's branch rather than reusing a stale one.
 
     Tier 1b — journal_templates_db: the per-DETAILS counterpart-account
     template saved whenever a journal entry is finalized (also what powers
@@ -383,12 +399,14 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
     if transaction_patterns_db:
         exact = transaction_patterns_db.find_pattern(details, direction, cashname)
         if exact:
+            if exact.get("action") == "journal" and exact.get("accname"):
+                exact = {**exact, "accname": _with_branch(exact["accname"], branchname)}
             return exact
 
     if journal_templates_db:
         tpl_acc, tpl_desc = journal_templates_db.get_suggestion(details)
         if tpl_acc:
-            return {"action": "journal", "accname": tpl_acc, "accdes": tpl_desc or ""}
+            return {"action": "journal", "accname": _with_branch(tpl_acc, branchname), "accdes": tpl_desc or ""}
 
     if recommendations_db:
         try:
@@ -1512,11 +1530,6 @@ def bank_line_create_journal():
                 "error": f"לא נמצא חשבון GL לבנק (CASHNAME={cashname}, סניף={branchname}). "
                           f"הזן אותו ידנית בשדה 'חשבון בנק GL'.",
             }), 422
-
-        def _with_branch(acc, branch):
-            if branch and branch != "000" and not acc.endswith(f"-{branch}"):
-                return f"{acc}-{branch}"
-            return acc
 
         bank_acc = bank_gl_account
         cp_acc   = _with_branch(counterpart, branchname)
