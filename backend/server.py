@@ -216,18 +216,23 @@ _prio_journal_hist_cache = {}   # (gl_account, branchname) -> (fetched_at, [entr
 _prio_receipt_hist_cache = {"fetched_at": 0.0, "index": {}}  # amount(2dp) -> {(accname, accdes)}
 
 
-def _fetch_journal_history(gl_account, branchname):
+def _fetch_journal_history(gl_account, branchname, deadline=None):
     """TTL-cached fetch of real Priority ledger history for a bank GL account:
     every FNCTRANS booked against it, paired with its counterpart account.
     This is the company's actual accounting history — years of it, including
     entries entered directly in Priority — independent of anything this app
-    has learned locally, so it works from the very first transaction."""
+    has learned locally, so it works from the very first transaction.
+
+    `deadline`: past it, skip a cold-cache fetch entirely (return whatever's
+    cached, even if stale, or empty) — see _find_auto_match for why."""
     import time as _time_mod
     key = (gl_account, branchname)
     now = _time_mod.time()
     cached = _prio_journal_hist_cache.get(key)
     if cached and now - cached[0] < _PRIO_HIST_TTL:
         return cached[1]
+    if deadline is not None and now >= deadline:
+        return cached[1] if cached else []
 
     entries = []
     try:
@@ -262,7 +267,7 @@ def _fetch_journal_history(gl_account, branchname):
     return entries
 
 
-def _fetch_receipt_amount_index():
+def _fetch_receipt_amount_index(deadline=None):
     """TTL-cached (amount, branch) → customer index from real CINVOICES/EINVOICES
     history. Only usable as a suggestion where a given amount maps to exactly
     one customer *in the same branch* across two years of history — bank
@@ -270,10 +275,15 @@ def _fetch_receipt_amount_index():
     signal we have, and an ambiguous amount (multiple customers) must not
     auto-suggest either one. Branch is a hard key, not a filter: a branch-102
     transaction must never surface a branch-109 customer just because two
-    branches happened to share a round number."""
+    branches happened to share a round number.
+
+    `deadline`: past it, skip a cold-cache fetch entirely (return whatever's
+    cached, even if stale, or empty) — see _find_auto_match for why."""
     import time as _time_mod
     now = _time_mod.time()
     if now - _prio_receipt_hist_cache["fetched_at"] < _PRIO_HIST_TTL and _prio_receipt_hist_cache["index"]:
+        return _prio_receipt_hist_cache["index"]
+    if deadline is not None and now >= deadline:
         return _prio_receipt_hist_cache["index"]
 
     index = {}
@@ -304,21 +314,35 @@ def _fetch_receipt_amount_index():
     return index
 
 
-def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0):
+def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0, deadline=None):
     """Wraps _find_auto_match_core(): when the suggestion is a plain receipt
     (TINVOICES — invoice_receipt/EINVOICES don't consume open invoices), also
     check for a single unambiguous open invoice at this exact amount so the
     one-click confirm closes it instead of just parking the payment as an
-    unlinked receipt."""
-    match = _find_auto_match_core(details, direction, cashname, branchname, bank_gl, amount)
+    unlinked receipt.
+
+    `deadline` (a time.time()-comparable timestamp) bounds the TOTAL time this
+    call is allowed to spend on live Priority lookups across the whole
+    transactions-list request: on a cold cache, each distinct bank account/
+    customer costs a fresh round-trip, and a batch with many of them could
+    still stack past a safe response time even with a short per-call timeout.
+    Once the budget is spent, remaining lines just skip tier 3/invoice-lookup
+    silently — a missing suggestion, never a hung page."""
+    match = _find_auto_match_core(details, direction, cashname, branchname, bank_gl, amount, deadline)
     if match and match.get("action") == "receipt" and match.get("accname") and amount:
-        invoices = _find_receipt_open_invoice(match["accname"], amount, branchname)
-        if invoices:
-            match["open_invoices"] = invoices
+        if deadline is None or _time_mod_now() < deadline:
+            invoices = _find_receipt_open_invoice(match["accname"], amount, branchname)
+            if invoices:
+                match["open_invoices"] = invoices
     return match
 
 
-def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="", amount=0):
+def _time_mod_now():
+    import time as _time_mod
+    return _time_mod.time()
+
+
+def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="", amount=0, deadline=None):
     """Suggest an action+account for a bank line from past history.
 
     Tier 1 — transaction_patterns_db: exact/substring match on the literal
@@ -365,7 +389,7 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
 
     if bank_gl:
         best, best_ratio = None, 0.0
-        for entry in _fetch_journal_history(bank_gl, branchname):
+        for entry in _fetch_journal_history(bank_gl, branchname, deadline):
             if entry["direction"] != direction:
                 continue
             ratio = _token_overlap_ratio(details, entry["details"])
@@ -375,7 +399,7 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
             return {"action": "journal", "accname": best["accname"], "accdes": best["accdes"]}
 
     if direction == "+" and amount:
-        candidates = _fetch_receipt_amount_index().get((round(amount, 2), branchname))
+        candidates = _fetch_receipt_amount_index(deadline).get((round(amount, 2), branchname))
         if candidates and len(candidates) == 1:
             accname, accdes = next(iter(candidates))
             return {"action": "receipt", "accname": accname, "accdes": accdes}
@@ -623,6 +647,14 @@ def receipts_bank_transactions():
         all_branches = sorted({(l.get("CASHNAME") or "").split("-")[0]
                                 for l in raw_lines if l.get("CASHNAME")})
 
+        import time as _time_mod
+        # Hard budget for ALL live Priority auto-match lookups combined in this
+        # request: on a cold cache, each distinct bank account/customer costs a
+        # fresh round-trip even at a short per-call timeout, and a batch with
+        # many of them could still stack past a safe response time. Once spent,
+        # remaining lines just get no tier-3 suggestion — never a hung page.
+        auto_match_deadline = _time_mod.time() + 20
+
         txns = []
         for line in raw_lines:
             bp   = line.get("BANKPAGE", "")
@@ -692,6 +724,7 @@ def receipts_bank_transactions():
                 "auto_match":       _find_auto_match(
                     line.get("DETAILS", ""), direction, cashname,
                     branchname=branch_code, bank_gl=cash_gl_map.get(cashname, ""), amount=amount,
+                    deadline=auto_match_deadline,
                 ),
             })
 
