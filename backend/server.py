@@ -349,6 +349,15 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
     DETAILS text (cheap, safe — recurring bank fees use byte-identical
     wording every time).
 
+    Tier 1b — journal_templates_db: the per-DETAILS counterpart-account
+    template saved whenever a journal entry is finalized (also what powers
+    the auto-fill in the journal modal, see /api/receipts/journal-template).
+    Same exact/substring key match as tier 1, kept separate because it's
+    direction/cashname-agnostic and always implies action="journal" — without
+    this, a recurring journal line (e.g. municipal property tax) would only
+    ever get its account auto-filled once the user manually opened the
+    journal modal, never surfaced as a green row-level suggestion up front.
+
     Tier 2 — recommendations_db: fuzzy token match (FTS5/BM25) against what
     THIS app has learned from documents it created. Requires the same bank
     account and direction, AND that most of this line's words were already
@@ -375,6 +384,11 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
         exact = transaction_patterns_db.find_pattern(details, direction, cashname)
         if exact:
             return exact
+
+    if journal_templates_db:
+        tpl_acc, tpl_desc = journal_templates_db.get_suggestion(details)
+        if tpl_acc:
+            return {"action": "journal", "accname": tpl_acc, "accdes": tpl_desc or ""}
 
     if recommendations_db:
         try:
