@@ -360,10 +360,16 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
     Tier 3 — live Priority history: the app's local learning starts from
     zero for anything it hasn't processed yet, but Priority already holds
     years of real accounting history. For journal-type lines (fees, standing
-    orders, direct debits) we fuzzy-match against real FNCTRANS ledger
-    entries booked on this bank's GL account. For customer receipts (money
-    in) we look up the exact amount in CINVOICES/EINVOICES — only when it
-    maps to exactly one customer, since amount alone can't disambiguate.
+    orders, direct debits, supplier transfers booked directly to a supplier
+    account) we fuzzy-match against real FNCTRANS ledger entries booked on
+    this bank's GL account — every finalized document (journal, transfer,
+    receipt) ends up posted there, so this also surfaces past supplier
+    transfers; the counterpart account's code shape (via _bank_txn_type)
+    tells us whether to label the suggestion "journal" or "transfer" rather
+    than guessing "journal" for everything found this way. For customer
+    receipts (money in) we look up the exact amount in CINVOICES/EINVOICES —
+    only when it maps to exactly one customer, since amount alone can't
+    disambiguate.
     """
     if transaction_patterns_db:
         exact = transaction_patterns_db.find_pattern(details, direction, cashname)
@@ -396,7 +402,8 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
             if ratio > best_ratio:
                 best, best_ratio = entry, ratio
         if best and best_ratio >= _REC_MATCH_MIN_OVERLAP:
-            return {"action": "journal", "accname": best["accname"], "accdes": best["accdes"]}
+            action = _TXN_ACTION_MAP.get(_bank_txn_type(best["accname"]), "journal")
+            return {"action": action, "accname": best["accname"], "accdes": best["accdes"]}
 
     if direction == "+" and amount:
         candidates = _fetch_receipt_amount_index(deadline).get((round(amount, 2), branchname))
