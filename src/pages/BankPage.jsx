@@ -1794,10 +1794,9 @@ export default function BankPage({ mode = 'bank' }) {
               {receiptAccFocused && allCustomers.length > 0 && (() => {
                 const q = modalAccname.trim().toLowerCase()
                 const branch = receiptModal?.BRANCHNAME
-                const branchMatches = branch && branch !== '000' ? allCustomers.filter(a => a.branchname === branch) : allCustomers
-                const pool = branchMatches.length > 0 ? branchMatches : allCustomers
-                const filtered = pool
+                const filtered = allCustomers
                   .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .sort((a, b) => (a.branchname === branch ? 0 : 1) - (b.branchname === branch ? 0 : 1))
                   .slice(0, 60)
                 if (filtered.length === 0) return null
                 const pick = (a) => {
@@ -1808,11 +1807,6 @@ export default function BankPage({ mode = 'bank' }) {
                 }
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
-                    {branch && branch !== '000' && branchMatches.length === 0 && (
-                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
-                        כל הלקוחות (לא נמצאו לקוחות לסניף {branch})
-                      </div>
-                    )}
                     {filtered.map(a => (
                       <button
                         key={a.accname}
@@ -2007,10 +2001,9 @@ export default function BankPage({ mode = 'bank' }) {
               {irAccFocused && allCustomers.length > 0 && (() => {
                 const q = irAccname.trim().toLowerCase()
                 const branch = irModal?.BRANCHNAME
-                const branchMatches = branch && branch !== '000' ? allCustomers.filter(a => a.branchname === branch) : allCustomers
-                const pool = branchMatches.length > 0 ? branchMatches : allCustomers
-                const filtered = pool
+                const filtered = allCustomers
                   .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .sort((a, b) => (a.branchname === branch ? 0 : 1) - (b.branchname === branch ? 0 : 1))
                   .slice(0, 60)
                 if (filtered.length === 0) return null
                 const pick = async (a) => {
@@ -2021,11 +2014,6 @@ export default function BankPage({ mode = 'bank' }) {
                 }
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 180, overflowY: 'auto', zIndex: 10, position: 'relative' }}>
-                    {branch && branch !== '000' && branchMatches.length === 0 && (
-                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
-                        כל הלקוחות (לא נמצאו לקוחות לסניף {branch})
-                      </div>
-                    )}
                     {filtered.map(a => (
                       <button
                         key={a.accname}
