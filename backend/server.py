@@ -185,6 +185,56 @@ except Exception as _rec2_db_err:
     logger.error(f"recommendations_db load FAILED: {_rec2_db_err}")
     recommendations_db = None
 
+_REC_MATCH_MIN_SCORE = 12.0     # secondary signal: bm25 score floor (corpus-size dependent)
+_REC_MATCH_MIN_OVERLAP = 0.6    # primary safety gate: fraction of this line's words seen before
+
+
+def _token_overlap_ratio(a, b):
+    """Fraction of a's distinctive (len>=2) tokens that also appear in b."""
+    import re
+    toks_a = {t for t in re.split(r"\s+", a.strip()) if len(t) >= 2}
+    toks_b = {t for t in re.split(r"\s+", b.strip()) if len(t) >= 2}
+    if not toks_a:
+        return 0.0
+    return len(toks_a & toks_b) / len(toks_a)
+
+
+def _find_auto_match(details, direction, cashname):
+    """Suggest an action+account for a bank line from past history.
+
+    1. transaction_patterns_db: exact/substring match on the literal DETAILS text
+       (cheap, safe — recurring bank fees use byte-identical wording every time).
+    2. recommendations_db: fuzzy token match (FTS5/BM25) for receipts/invoices/
+       transfers, where DETAILS varies slightly per transaction (ref numbers,
+       dates). Requires the same bank account and direction, AND that most of
+       this line's words were already seen in the matched pattern — bm25 alone
+       isn't enough of a gate since the cashname/direction boosts it adds are
+       constant once those are hard-filtered, so a single generic shared word
+       (e.g. "תשלום") could otherwise clear a flat score threshold.
+    """
+    if transaction_patterns_db:
+        exact = transaction_patterns_db.find_pattern(details, direction, cashname)
+        if exact:
+            return exact
+
+    if recommendations_db:
+        try:
+            candidates = recommendations_db.match(details, cashname=cashname, direction=direction, limit=1)
+        except Exception:
+            candidates = []
+        if candidates:
+            top = candidates[0]
+            if (top.get("cashname") == cashname and top.get("direction") == direction
+                    and (top.get("score") or 0) >= _REC_MATCH_MIN_SCORE
+                    and _token_overlap_ratio(details, top.get("details", "")) >= _REC_MATCH_MIN_OVERLAP):
+                return {
+                    "action":  top.get("action") or "journal",
+                    "accname": top.get("counterpart_account", ""),
+                    "accdes":  top.get("counterpart_desc", ""),
+                }
+    return None
+
+
 # Load Priority accounts cache module (SQLite + FTS5)
 try:
     acc2_db_path = PROJECT_ROOT / "database" / "receipts" / "accounts_db.py"
@@ -483,11 +533,7 @@ def receipts_bank_transactions():
                         cashname in credit_card_set or len(cashname.split("-")) != 2
                     ) else ""
                 ),
-                "auto_match":       (
-                    transaction_patterns_db.find_pattern(
-                        line.get("DETAILS", ""), direction, cashname
-                    ) if transaction_patterns_db else None
-                ),
+                "auto_match":       _find_auto_match(line.get("DETAILS", ""), direction, cashname),
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
@@ -651,6 +697,14 @@ def bank_line_create_receipt():
                 )
             except Exception as _pe:
                 logger.warning(f"save_pattern failed: {_pe}")
+        if recommendations_db:
+            try:
+                recommendations_db.add(
+                    details=details, counterpart_account=accname, counterpart_desc=accdes,
+                    cashname=cashname, branch=branchname, direction="+", action=doc_type,
+                )
+            except Exception as _re:
+                logger.warning(f"recommendations_db.add failed: {_re}")
 
         _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type=doc_type, label="receipt")
 
@@ -917,6 +971,24 @@ def bank_line_create_invoice_receipt():
         processed = _load_processed_txns()
         processed.add(txn_id)
         _save_processed_txns(processed)
+
+        if transaction_patterns_db:
+            try:
+                transaction_patterns_db.save_pattern(
+                    details=details, direction="+",
+                    action="invoice_receipt", accname=accname, accdes=accdes,
+                    cashname=cashname, branchname=branchname,
+                )
+            except Exception as _pe:
+                logger.warning(f"save_pattern failed: {_pe}")
+        if recommendations_db:
+            try:
+                recommendations_db.add(
+                    details=details, counterpart_account=accname, counterpart_desc=accdes,
+                    cashname=cashname, branch=branchname, direction="+", action="invoice_receipt",
+                )
+            except Exception as _re:
+                logger.warning(f"recommendations_db.add failed: {_re}")
 
         _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type="invoice_receipt", label="invoice_receipt")
 
@@ -1276,6 +1348,14 @@ def bank_line_create_journal():
                 )
             except Exception as _pe:
                 logger.warning(f"save_pattern failed: {_pe}")
+        if recommendations_db:
+            try:
+                recommendations_db.add(
+                    details=details, counterpart_account=cp_acc, counterpart_desc=counterpart_desc,
+                    cashname=cashname, branch=branchname, direction=direction, action="journal",
+                )
+            except Exception as _re:
+                logger.warning(f"recommendations_db.add failed: {_re}")
 
         _launch_bank_recon(fncnum, cashname, txn_id, label="journal")
 
@@ -1468,6 +1548,14 @@ def bank_line_create_transfer():
                 )
             except Exception as _pe:
                 logger.warning(f"save_pattern failed: {_pe}")
+        if recommendations_db:
+            try:
+                recommendations_db.add(
+                    details=details, counterpart_account=accname, counterpart_desc=result.get("CDES", ""),
+                    cashname=cashname, branch=branchname, direction=direction, action="transfer",
+                )
+            except Exception as _re:
+                logger.warning(f"recommendations_db.add failed: {_re}")
 
         _launch_bank_recon(ivnum, cashname, txn_id, label="transfer")
 
