@@ -59,6 +59,8 @@ export default function BankPage({ mode = 'bank' }) {
   const [since, setSince]             = useState('')
   const [branchFilter, setBranchFilter] = useState('all')
   const [allBranches, setAllBranches] = useState([])
+  const [bankFilter, setBankFilter] = useState('all')
+  const [allBanks, setAllBanks] = useState([])
 
   // Receipt modal state
   const [receiptModal, setReceiptModal]       = useState(null)
@@ -139,16 +141,17 @@ export default function BankPage({ mode = 'bank' }) {
   const [allCustomers, setAllCustomers] = useState([])
   const [receiptAccFocused, setReceiptAccFocused] = useState(false)
 
-  const loadAll = useCallback(async (d, b, refreshGl) => {
+  const loadAll = useCallback(async (d, b, refreshGl, bk) => {
     const daysParam   = d ?? days
     const branchParam = b !== undefined ? b : branchFilter
+    const bankParam   = bk !== undefined ? bk : bankFilter
     setLoading(true)
     setError('')
     try {
       const glParam = refreshGl ? '&refresh_gl=1' : ''
-      const txnUrl = branchParam && branchParam !== 'all'
-        ? `${API}/api/receipts/bank-transactions?days=${daysParam}&branch=${encodeURIComponent(branchParam)}${glParam}`
-        : `${API}/api/receipts/bank-transactions?days=${daysParam}${glParam}`
+      const branchQ = branchParam && branchParam !== 'all' ? `&branch=${encodeURIComponent(branchParam)}` : ''
+      const bankQ   = bankParam && bankParam !== 'all' ? `&bank=${encodeURIComponent(bankParam)}` : ''
+      const txnUrl = `${API}/api/receipts/bank-transactions?days=${daysParam}${branchQ}${bankQ}${glParam}`
       const [bRes, a, doneRes] = await Promise.all([
         fetch(txnUrl).then(r => r.json()),
         fetch(`${API}/api/receipts/approved`).then(r => r.json()),
@@ -164,6 +167,10 @@ export default function BankPage({ mode = 'bank' }) {
         if (!branchParam || branchParam === 'all') {
           const branches = [...new Set(txns.map(t => t.BRANCHNAME).filter(Boolean))].sort()
           setAllBranches(branches)
+        }
+        if (!bankParam || bankParam === 'all') {
+          const banks = [...new Set(txns.map(t => t.bank_name).filter(Boolean))].sort()
+          setAllBanks(banks)
         }
         setRowActions(prev => {
           const next = { ...prev }
@@ -208,7 +215,7 @@ export default function BankPage({ mode = 'bank' }) {
     } finally {
       setLoading(false)
     }
-  }, [days, branchFilter])
+  }, [days, branchFilter, bankFilter])
 
   useEffect(() => { loadAll() }, [loadAll])
 
@@ -1037,6 +1044,16 @@ export default function BankPage({ mode = 'bank' }) {
                 >
                   <option value="all">כל הסניפים</option>
                   {allBranches.map(b => <option key={b} value={b}>{b}</option>)}
+                </select>
+              </div>
+              <div className="receipts-days-selector">
+                <label>בנק:</label>
+                <select
+                  value={bankFilter}
+                  onChange={e => { const v = e.target.value; setBankFilter(v); loadAll(undefined, undefined, undefined, v) }}
+                >
+                  <option value="all">כל הבנקים</option>
+                  {allBanks.map(bk => <option key={bk} value={bk}>{bk}</option>)}
                 </select>
               </div>
               <div className="receipts-days-selector">

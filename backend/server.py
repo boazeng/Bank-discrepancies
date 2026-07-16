@@ -488,6 +488,7 @@ def receipts_bank_transactions():
     try:
         days = int(request.args.get("days", 180))
         branch = (request.args.get("branch") or "").strip()
+        bank = (request.args.get("bank") or "").strip()
         # Force a fresh GL re-detection for unresolved CASHNAMEs (bypass the 1-day
         # negative-cache TTL). Resolved/manually-set GLs are kept untouched.
         refresh_gl = (request.args.get("refresh_gl") or "").lower() in ("1", "true", "yes")
@@ -657,8 +658,11 @@ def receipts_bank_transactions():
                 ),
             })
 
+        if bank and bank != "all":
+            txns = [t for t in txns if t["bank_name"] == bank]
+
         return jsonify({"ok": True, "transactions": txns, "days": days,
-                        "since": since_date[:10], "branch": branch})
+                        "since": since_date[:10], "branch": branch, "bank": bank})
     except Exception as e:
         return jsonify({"ok": False, "error": str(e)}), 500
 
