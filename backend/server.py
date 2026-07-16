@@ -621,6 +621,13 @@ def receipts_bank_transactions():
                 continue
             if txn_id in action_queued_ids:
                 continue
+            # Priority already links this bank line to a ledger transaction
+            # (e.g. reconciled directly in Priority, outside this app) even
+            # though ERECONNUM hasn't caught up to 0→nonzero yet. Our own
+            # processed/queued tracking can't know about that — Priority's
+            # own FNCNUM on the line is the signal that it's already handled.
+            if str(line.get("FNCNUM") or "").strip():
+                continue
 
             credit = float(line.get("CREDIT") or 0)
             debit  = float(line.get("DEBIT")  or 0)
@@ -848,8 +855,6 @@ def bank_line_create_receipt():
                 )
             except Exception as _re:
                 logger.warning(f"recommendations_db.add failed: {_re}")
-
-        _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type=doc_type, label="receipt")
 
         return jsonify({"ok": True, "priority_ivnum": priority_ivnum})
 
@@ -1133,8 +1138,6 @@ def bank_line_create_invoice_receipt():
             except Exception as _re:
                 logger.warning(f"recommendations_db.add failed: {_re}")
 
-        _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type="invoice_receipt", label="invoice_receipt")
-
         return jsonify({"ok": True, "priority_ivnum": priority_ivnum})
 
     except http_requests.exceptions.HTTPError as e:
@@ -1381,6 +1384,30 @@ def _launch_close_and_recon(priority_ivnum, cashname, bank_txn_id, doc_type="rec
         threading.Thread(target=_run, daemon=True).start()
     except Exception as ex:
         logger.warning(f"close_and_recon launch failed [{label}]: {ex}")
+
+
+@app.route("/api/receipts/bank-line/finalize-receipt", methods=["POST"])
+def bank_line_finalize_receipt():
+    """Explicit user confirmation step: close a draft receipt/invoice-receipt and run bank recon.
+
+    Draft creation (create-receipt / create-invoice-receipt) no longer finalizes automatically —
+    the user must review the draft and call this endpoint separately to confirm.
+    """
+    try:
+        data           = request.get_json(force=True) or {}
+        txn_id         = str(data.get("txn_id",         "")).strip()
+        priority_ivnum = str(data.get("priority_ivnum", "")).strip()
+        cashname       = str(data.get("cashname",       "")).strip()
+        doc_type       = str(data.get("doc_type", "receipt")).strip()
+
+        if not priority_ivnum or not cashname:
+            return jsonify({"ok": False, "error": "חסרים שדות חובה (priority_ivnum, cashname)"}), 400
+
+        _launch_close_and_recon(priority_ivnum, cashname, txn_id, doc_type=doc_type, label=doc_type)
+
+        return jsonify({"ok": True})
+    except Exception as e:
+        return jsonify({"ok": False, "error": str(e)}), 500
 
 
 @app.route("/api/receipts/bank-line/create-journal", methods=["POST"])

@@ -77,6 +77,8 @@ export default function BankPage({ mode = 'bank' }) {
   const [selectedInvoices, setSelectedInvoices] = useState(new Set())
   const [existingRc, setExistingRc]             = useState(null)
   const [receiptDocType, setReceiptDocType]     = useState('receipt')
+  const [draftInfo, setDraftInfo]               = useState(null)
+  const [finalizing, setFinalizing]             = useState(false)
 
   // Journal entry modal state
   const [journalModal, setJournalModal]               = useState(null)
@@ -108,6 +110,8 @@ export default function BankPage({ mode = 'bank' }) {
 
   // Invoice receipt modal state
   const [irModal, setIrModal]         = useState(null)
+  const [irDraftInfo, setIrDraftInfo] = useState(null)
+  const [irFinalizing, setIrFinalizing] = useState(false)
   const [irAccname, setIrAccname]     = useState('')
   const [irAccdes, setIrAccdes]       = useState('')
   const [irDetails, setIrDetails]     = useState('')
@@ -138,8 +142,6 @@ export default function BankPage({ mode = 'bank' }) {
 
   // Pre-loaded account lists for dropdowns
   const [allSuppliers, setAllSuppliers] = useState([])
-  const [allCustomers, setAllCustomers] = useState([])
-  const [receiptAccFocused, setReceiptAccFocused] = useState(false)
 
   const loadAll = useCallback(async (d, b, refreshGl, bk) => {
     const daysParam   = d ?? days
@@ -323,8 +325,8 @@ export default function BankPage({ mode = 'bank' }) {
     setOpenInvoices([])
     setSelectedInvoices(new Set())
     setExistingRc(null)
-    setReceiptAccFocused(false)
-    loadAllCustomers()
+    setDraftInfo(null)
+    setFinalizing(false)
     if (txn.SUM1) {
       setCustSearching(true)
       try {
@@ -404,13 +406,44 @@ export default function BankPage({ mode = 'bank' }) {
         const prioMsg = data.detail?.error?.message?.value || data.detail?.error?.message || ''
         throw new Error(prioMsg || data.error || 'שגיאה')
       }
-      setLastIvnum(data.priority_ivnum)
+      setDraftInfo({ ivnum: data.priority_ivnum })
       await loadAll()
-      setReceiptModal(null)
     } catch (e) {
       setModalError(e.message)
     } finally {
       setModalSending(false)
+    }
+  }
+
+  async function finalizeReceipt() {
+    if (!draftInfo || !receiptModal) return
+    setFinalizing(true)
+    setModalError('')
+    try {
+      const txn = receiptModal
+      const resp = await fetch(`${API}/api/receipts/bank-line/finalize-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txn_id:         txn.FNCNUM,
+          priority_ivnum: draftInfo.ivnum,
+          cashname:       txn.CASHNAME,
+          doc_type:       receiptDocType,
+        }),
+      })
+      const data = await resp.json()
+      if (!data.ok) throw new Error(data.error || 'שגיאה')
+      setLastIvnum(draftInfo.ivnum)
+      setDraftInfo(null)
+      setReceiptModal(null)
+      setOpenInvoices([])
+      setSelectedInvoices(new Set())
+      setExistingRc(null)
+      await loadAll()
+    } catch (e) {
+      setModalError(e.message)
+    } finally {
+      setFinalizing(false)
     }
   }
 
@@ -519,6 +552,8 @@ export default function BankPage({ mode = 'bank' }) {
     setIrSending(false)
     setIrError('')
     setIrPrevNote('')
+    setIrDraftInfo(null)
+    setIrFinalizing(false)
     setCustSuggestions([])
     setAccSuggestions([])
 
@@ -574,13 +609,41 @@ export default function BankPage({ mode = 'bank' }) {
           || data.error || 'שגיאה'
         throw new Error(pMsg)
       }
-      setLastIvnum(data.priority_ivnum)
+      setIrDraftInfo({ ivnum: data.priority_ivnum })
       await loadAll()
-      setIrModal(null)
     } catch (e) {
       setIrError(e.message)
     } finally {
       setIrSending(false)
+    }
+  }
+
+  async function finalizeInvoiceReceipt() {
+    if (!irDraftInfo || !irModal) return
+    setIrFinalizing(true)
+    setIrError('')
+    try {
+      const txn = irModal
+      const resp = await fetch(`${API}/api/receipts/bank-line/finalize-receipt`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          txn_id:         txn.FNCNUM,
+          priority_ivnum: irDraftInfo.ivnum,
+          cashname:       txn.CASHNAME,
+          doc_type:       'invoice_receipt',
+        }),
+      })
+      const data = await resp.json()
+      if (!data.ok) throw new Error(data.error || 'שגיאה')
+      setLastIvnum(irDraftInfo.ivnum)
+      setIrDraftInfo(null)
+      setIrModal(null)
+      await loadAll()
+    } catch (e) {
+      setIrError(e.message)
+    } finally {
+      setIrFinalizing(false)
     }
   }
 
@@ -815,14 +878,6 @@ export default function BankPage({ mode = 'bank' }) {
     try {
       const res = await fetch(`${API}/api/receipts/all-suppliers?branch=${encodeURIComponent(branch || '')}`).then(r => r.json())
       if (res.ok) { setAllSuppliers(res.accounts || []); setTransferDropdownOpen(true) }
-    } catch { /* silent */ }
-  }
-
-  async function loadAllCustomers() {
-    if (allCustomers.length > 0) return
-    try {
-      const res = await fetch(`${API}/api/receipts/all-customers`).then(r => r.json())
-      if (res.ok) setAllCustomers(res.accounts || [])
     } catch { /* silent */ }
   }
 
@@ -1720,66 +1775,47 @@ export default function BankPage({ mode = 'bank' }) {
               <label>קוד לקוח בפריוריטי (ACCNAME) *</label>
               <input
                 type="text"
-                placeholder={allCustomers.length > 0 ? 'חפש לפי קוד או שם לקוח...' : 'לדוגמה: 50440 או שם לקוח'}
+                placeholder="חפש לפי קוד או שם לקוח..."
                 value={modalAccname}
-                onFocus={() => setReceiptAccFocused(true)}
-                onBlur={e => {
-                  setTimeout(() => setReceiptAccFocused(false), 150)
-                  const v = e.target.value.trim()
-                  if (v.length >= 2) {
-                    searchOpenInvoices(v, receiptModal)
-                    if (!modalAccdes) {
-                      fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(v)}&branchname=${encodeURIComponent(receiptModal?.BRANCHNAME || '')}`)
-                        .then(r => r.json())
-                        .then(d => {
-                          const exact = (d.accounts || []).find(a => a.accname === v || a.accname === `${v}-${receiptModal?.BRANCHNAME}`)
-                          if (exact) setModalAccdes(exact.accdes)
-                          else if (d.accounts?.length === 1) setModalAccdes(d.accounts[0].accdes)
-                        })
-                        .catch(() => {})
-                    }
-                  }
-                }}
                 onChange={e => {
                   const v = e.target.value
                   setModalAccname(v)
                   setModalAccdes('')
                   setOpenInvoices([])
                   setSelectedInvoices(new Set())
+                  searchAccounts(v, receiptModal?.BRANCHNAME)
+                }}
+                onBlur={e => {
+                  setTimeout(() => setAccSuggestions([]), 200)
+                  const v = e.target.value.trim()
+                  if (v.length >= 2) searchOpenInvoices(v, receiptModal)
                 }}
                 autoFocus={custSuggestions.length === 0}
               />
-              {receiptAccFocused && allCustomers.length > 0 && (() => {
-                const q = modalAccname.trim().toLowerCase()
-                const branch = receiptModal?.BRANCHNAME
-                const suffix = branch && branch !== '000' ? `-${branch}` : ''
-                const filtered = allCustomers
-                  .filter(a => !suffix || a.accname.endsWith(suffix))
-                  .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
-                  .slice(0, 60)
-                if (filtered.length === 0) return null
-                return (
-                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
-                    {filtered.map(a => (
-                      <button
-                        key={a.accname}
-                        onMouseDown={() => {
-                          setModalAccname(a.accname)
-                          setModalAccdes(a.accdes || '')
-                          setReceiptAccFocused(false)
-                          searchOpenInvoices(a.accname, receiptModal)
-                        }}
-                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                          borderBottom: '1px solid #f3f4f6' }}
-                      >
-                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                        {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
-                      </button>
-                    ))}
-                  </div>
-                )
-              })()}
+              {accSearching && <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש...</p>}
+              {accSuggestions.length > 0 && (
+                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                  {accSuggestions.map(a => (
+                    <button
+                      key={a.accname}
+                      onMouseDown={() => {
+                        setModalAccname(a.accname)
+                        setModalAccdes(a.accdes || '')
+                        setAccSuggestions([])
+                        setOpenInvoices([])
+                        setSelectedInvoices(new Set())
+                        searchOpenInvoices(a.accname, receiptModal)
+                      }}
+                      style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                        border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                        borderBottom: '1px solid #f3f4f6' }}
+                    >
+                      <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                      {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
+                    </button>
+                  ))}
+                </div>
+              )}
               {modalAccdes && (
                 <div style={{ marginTop: 4, fontSize: 13, color: '#15803d', fontWeight: 600 }}>
                   {modalAccdes}
@@ -1852,22 +1888,46 @@ export default function BankPage({ mode = 'bank' }) {
               </div>
             )}
 
+            {draftInfo && (
+              <div style={{
+                margin: '8px 0', padding: '10px 14px', borderRadius: 8,
+                background: '#eff6ff', border: '1px solid #93c5fd',
+                color: '#1d4ed8', fontSize: 13, fontWeight: 600,
+              }}>
+                טיוטה נוצרה בפריוריטי:&nbsp;
+                <span style={{ fontFamily: 'monospace', fontSize: 14 }}>{draftInfo.ivnum}</span>
+                <div style={{ fontWeight: 400, marginTop: 4, color: '#374151' }}>
+                  יש לבדוק את הפרטים ולאשר סופית כדי לסגור את המסמך ולבצע התאמת בנק.
+                </div>
+              </div>
+            )}
+
             {modalError && <p className="receipts-error" style={{ margin: '8px 0' }}>{modalError}</p>}
 
             <div className="receipts-modal-actions">
-              <button
-                className="receipts-btn receipts-btn-approve"
-                onClick={submitReceipt}
-                disabled={modalSending || !!existingRc}
-              >
-                {modalSending ? 'שולח לפריוריטי...' : receiptDocType === 'invoice_receipt' ? 'הפק חשבונית מס קבלה' : 'הפק קבלה'}
-              </button>
+              {!draftInfo ? (
+                <button
+                  className="receipts-btn receipts-btn-approve"
+                  onClick={submitReceipt}
+                  disabled={modalSending || !!existingRc}
+                >
+                  {modalSending ? 'שולח לפריוריטי...' : receiptDocType === 'invoice_receipt' ? 'הפק חשבונית מס קבלה' : 'הפק קבלה'}
+                </button>
+              ) : (
+                <button
+                  className="receipts-btn receipts-btn-approve"
+                  onClick={finalizeReceipt}
+                  disabled={finalizing}
+                >
+                  {finalizing ? 'מאשר סופית...' : 'אשר סופי'}
+                </button>
+              )}
               <button
                 className="receipts-btn receipts-btn-cancel"
-                onClick={() => { setReceiptModal(null); setOpenInvoices([]); setSelectedInvoices(new Set()); setExistingRc(null) }}
-                disabled={modalSending}
+                onClick={() => { setReceiptModal(null); setOpenInvoices([]); setSelectedInvoices(new Set()); setExistingRc(null); setDraftInfo(null) }}
+                disabled={modalSending || finalizing}
               >
-                ביטול
+                {draftInfo ? 'השאר כטיוטה וסגור' : 'ביטול'}
               </button>
             </div>
           </div>
@@ -2062,14 +2122,38 @@ export default function BankPage({ mode = 'bank' }) {
               </div>
             )}
 
+            {irDraftInfo && (
+              <div style={{
+                margin: '8px 0', padding: '10px 14px', borderRadius: 8,
+                background: '#eff6ff', border: '1px solid #93c5fd',
+                color: '#1d4ed8', fontSize: 13, fontWeight: 600,
+              }}>
+                טיוטה נוצרה בפריוריטי:&nbsp;
+                <span style={{ fontFamily: 'monospace', fontSize: 14 }}>{irDraftInfo.ivnum}</span>
+                <div style={{ fontWeight: 400, marginTop: 4, color: '#374151' }}>
+                  יש לבדוק את הפרטים ולאשר סופית כדי לסגור את המסמך ולבצע התאמת בנק.
+                </div>
+              </div>
+            )}
+
             {irError && <p className="receipts-error" style={{ margin: '8px 0' }}>{irError}</p>}
 
             <div className="receipts-modal-actions">
-              <button className="receipts-btn receipts-btn-approve" onClick={submitInvoiceReceipt} disabled={irSending}>
-                {irSending ? 'שולח לפריוריטי...' : 'הפק חשבונית מס קבלה'}
-              </button>
-              <button className="receipts-btn receipts-btn-cancel" onClick={() => { setIrModal(null); setCustSuggestions([]) }} disabled={irSending}>
-                ביטול
+              {!irDraftInfo ? (
+                <button className="receipts-btn receipts-btn-approve" onClick={submitInvoiceReceipt} disabled={irSending}>
+                  {irSending ? 'שולח לפריוריטי...' : 'הפק חשבונית מס קבלה'}
+                </button>
+              ) : (
+                <button className="receipts-btn receipts-btn-approve" onClick={finalizeInvoiceReceipt} disabled={irFinalizing}>
+                  {irFinalizing ? 'מאשר סופית...' : 'אשר סופי'}
+                </button>
+              )}
+              <button
+                className="receipts-btn receipts-btn-cancel"
+                onClick={() => { setIrModal(null); setCustSuggestions([]); setIrDraftInfo(null) }}
+                disabled={irSending || irFinalizing}
+              >
+                {irDraftInfo ? 'השאר כטיוטה וסגור' : 'ביטול'}
               </button>
             </div>
           </div>
