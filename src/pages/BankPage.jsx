@@ -49,6 +49,7 @@ export default function BankPage({ mode = 'bank' }) {
   const [actioning, setActioning] = useState(null)
   const [rowActions, setRowActions] = useState({})
   const [quickConfirming, setQuickConfirming] = useState(null)
+  const [dismissedMatches, setDismissedMatches] = useState(new Set())
 
   const [activeTab, setActiveTab]     = useState('bank')
   const [unmatchedOpen, setUnmatchedOpen] = useState(false)
@@ -1118,7 +1119,7 @@ export default function BankPage({ mode = 'bank' }) {
           )
 
           const txnRows = (txns, isCredit = false) => txns.map(txn => {
-            const match   = txn.auto_match
+            const match   = dismissedMatches.has(txn.FNCNUM) ? null : txn.auto_match
             const chosen  = rowActions[txn.FNCNUM] || txn.suggested_action || 'journal'
             const s       = ACTION_STYLES[chosen] || ACTION_STYLES.journal
             const busy    = actioning === txn.FNCNUM
@@ -1195,6 +1196,16 @@ export default function BankPage({ mode = 'bank' }) {
                         }}
                       >
                         ✎ ערוך
+                      </button>
+                      <button
+                        title="בטל את ההמלצה וטפל בתנועה ידנית"
+                        style={{
+                          background: 'none', border: '1px solid #d1d5db', borderRadius: 6,
+                          padding: '5px 8px', cursor: 'pointer', fontSize: 12, color: '#9ca3af',
+                        }}
+                        onClick={() => setDismissedMatches(prev => new Set(prev).add(txn.FNCNUM))}
+                      >
+                        ✕
                       </button>
                     </div>
                   ) : (
