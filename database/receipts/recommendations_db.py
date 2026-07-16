@@ -46,6 +46,7 @@ def _init():
             direction           TEXT DEFAULT '',
             counterpart_account TEXT NOT NULL,
             counterpart_desc    TEXT DEFAULT '',
+            action              TEXT DEFAULT 'journal',
             times_used          INTEGER DEFAULT 1,
             last_used           TEXT DEFAULT '',
             created_at          TEXT DEFAULT ''
@@ -63,6 +64,12 @@ def _init():
             INSERT INTO rec_fts(rowid, details) VALUES (new.rowid, new.details);
         END;
         """)
+        # Migrate DBs created before the `action` column existed.
+        try:
+            c.execute("ALTER TABLE recommendations ADD COLUMN action TEXT DEFAULT 'journal'")
+            c.commit()
+        except sqlite3.OperationalError:
+            pass
         c.commit()
     finally:
         c.close()
@@ -75,7 +82,7 @@ def _row(r):
 # ── CRUD ─────────────────────────────────────────────────────────────────────
 
 def add(details, counterpart_account, counterpart_desc="", cashname="",
-        branch="", direction="", times_used=1):
+        branch="", direction="", action="journal", times_used=1):
     """Insert a recommendation, or if one already exists for the same
     (normalized details + cashname), bump its usage and refresh the account."""
     details = _normalize(details)
@@ -91,8 +98,8 @@ def add(details, counterpart_account, counterpart_desc="", cashname="",
         if existing:
             c.execute(
                 "UPDATE recommendations SET counterpart_account=?, counterpart_desc=?, "
-                "branch=?, direction=?, times_used=times_used+?, last_used=? WHERE id=?",
-                (counterpart_account, counterpart_desc, branch, direction,
+                "branch=?, direction=?, action=?, times_used=times_used+?, last_used=? WHERE id=?",
+                (counterpart_account, counterpart_desc, branch, direction, action or "journal",
                  max(1, times_used), _now(), existing["id"]),
             )
             rid = existing["id"]
@@ -100,10 +107,11 @@ def add(details, counterpart_account, counterpart_desc="", cashname="",
             rid = str(uuid.uuid4())
             c.execute(
                 "INSERT INTO recommendations(id, details, cashname, branch, direction, "
-                "counterpart_account, counterpart_desc, times_used, last_used, created_at) "
-                "VALUES(?,?,?,?,?,?,?,?,?,?)",
+                "counterpart_account, counterpart_desc, action, times_used, last_used, created_at) "
+                "VALUES(?,?,?,?,?,?,?,?,?,?,?)",
                 (rid, details, cashname or "", branch or "", direction or "",
-                 counterpart_account, counterpart_desc or "", max(1, times_used), _now(), _now()),
+                 counterpart_account, counterpart_desc or "", action or "journal",
+                 max(1, times_used), _now(), _now()),
             )
         c.commit()
         return get(rid)
@@ -122,7 +130,7 @@ def get(rid):
 def update(rid, **fields):
     """Edit allowed columns of a recommendation."""
     allowed = {"details", "cashname", "branch", "direction",
-               "counterpart_account", "counterpart_desc"}
+               "counterpart_account", "counterpart_desc", "action"}
     sets = {k: (_normalize(v) if k == "details" else v)
             for k, v in fields.items() if k in allowed}
     if not sets:
@@ -221,8 +229,9 @@ def match(details, cashname="", branch="", direction="", limit=5):
         for r in rows:
             d = dict(r)
             bm = d.pop("bm", 0) or 0
-            # bm25: lower (more negative) = better. Turn into a positive base score.
-            base = max(0.0, 10.0 + bm)            # ~10 for a strong textual match
+            # bm25: lower (more negative) = better match. Negate so a strong
+            # match (bm far below zero) produces a high base score.
+            base = max(0.0, 10.0 - bm)
             if cashname and d.get("cashname") == cashname:
                 base += 6                          # same bank account → strong signal
             if branch and d.get("branch") == branch:
