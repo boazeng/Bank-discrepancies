@@ -199,18 +199,118 @@ def _token_overlap_ratio(a, b):
     return len(toks_a & toks_b) / len(toks_a)
 
 
-def _find_auto_match(details, direction, cashname):
+_PRIO_HIST_TTL = 600  # seconds — Priority accounting history barely changes minute to minute
+_prio_journal_hist_cache = {}   # (gl_account, branchname) -> (fetched_at, [entries])
+_prio_receipt_hist_cache = {"fetched_at": 0.0, "index": {}}  # amount(2dp) -> {(accname, accdes)}
+
+
+def _fetch_journal_history(gl_account, branchname):
+    """TTL-cached fetch of real Priority ledger history for a bank GL account:
+    every FNCTRANS booked against it, paired with its counterpart account.
+    This is the company's actual accounting history — years of it, including
+    entries entered directly in Priority — independent of anything this app
+    has learned locally, so it works from the very first transaction."""
+    import time as _time_mod
+    key = (gl_account, branchname)
+    now = _time_mod.time()
+    cached = _prio_journal_hist_cache.get(key)
+    if cached and now - cached[0] < _PRIO_HIST_TTL:
+        return cached[1]
+
+    entries = []
+    try:
+        since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
+        flt = f"BRANCHNAME eq '{branchname}' and FNCDATE ge {since}" if branchname else f"FNCDATE ge {since}"
+        r = http_requests.get(
+            f"{_prio_url()}/FNCTRANS?$filter={flt}"
+            "&$expand=FNCITEMS_SUBFORM($select=ACCNAME,ACCDES,DETAILS,DEBIT1,CREDIT1)"
+            "&$select=FNCNUM&$top=300",
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=25, verify=False,
+        )
+        r.raise_for_status()
+        for row in r.json().get("value", []):
+            items = row.get("FNCITEMS_SUBFORM", []) or []
+            bank_leg = next((it for it in items if it.get("ACCNAME") == gl_account), None)
+            if not bank_leg:
+                continue
+            counterpart = next((it for it in items if it.get("ACCNAME") != gl_account), None)
+            if not counterpart or not counterpart.get("ACCNAME"):
+                continue
+            leg_direction = "+" if float(bank_leg.get("DEBIT1") or 0) > 0 else "-"
+            entries.append({
+                "details":   bank_leg.get("DETAILS", "") or "",
+                "accname":   counterpart.get("ACCNAME", ""),
+                "accdes":    counterpart.get("ACCDES", ""),
+                "direction": leg_direction,
+            })
+    except Exception as _e:
+        logger.warning(f"_fetch_journal_history({gl_account}) failed: {_e}")
+
+    _prio_journal_hist_cache[key] = (now, entries)
+    return entries
+
+
+def _fetch_receipt_amount_index():
+    """TTL-cached amount → customer index from real CINVOICES/EINVOICES history.
+    Only usable as a suggestion where a given amount maps to exactly one
+    customer across two years of history — bank DETAILS text carries no
+    reusable customer identity, so amount is the only signal we have, and an
+    ambiguous amount (multiple customers) must not auto-suggest either one."""
+    import time as _time_mod
+    now = _time_mod.time()
+    if now - _prio_receipt_hist_cache["fetched_at"] < _PRIO_HIST_TTL and _prio_receipt_hist_cache["index"]:
+        return _prio_receipt_hist_cache["index"]
+
+    index = {}
+    try:
+        since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
+        for entity, extra_filter in (("CINVOICES", " and STATDES ne 'מבוטלת'"), ("EINVOICES", "")):
+            flt = f"IVDATE ge {since}{extra_filter}"
+            r = http_requests.get(
+                f"{_prio_url()}/{entity}?$filter={flt}"
+                "&$select=CUSTNAME,CDES,TOTPRICE,BRANCHNAME&$top=3000",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=25, verify=False,
+            )
+            if not r.ok:
+                continue
+            for inv in r.json().get("value", []):
+                amt = round(float(inv.get("TOTPRICE") or 0), 2)
+                cust = (inv.get("CUSTNAME") or "").strip()
+                if not amt or not cust:
+                    continue
+                branchn = (inv.get("BRANCHNAME") or "").strip()
+                accname = f"{cust}-{branchn}" if branchn and branchn != "000" else cust
+                index.setdefault(amt, set()).add((accname, (inv.get("CDES") or "").strip()))
+    except Exception as _e:
+        logger.warning(f"_fetch_receipt_amount_index failed: {_e}")
+
+    _prio_receipt_hist_cache["fetched_at"] = now
+    _prio_receipt_hist_cache["index"] = index
+    return index
+
+
+def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0):
     """Suggest an action+account for a bank line from past history.
 
-    1. transaction_patterns_db: exact/substring match on the literal DETAILS text
-       (cheap, safe — recurring bank fees use byte-identical wording every time).
-    2. recommendations_db: fuzzy token match (FTS5/BM25) for receipts/invoices/
-       transfers, where DETAILS varies slightly per transaction (ref numbers,
-       dates). Requires the same bank account and direction, AND that most of
-       this line's words were already seen in the matched pattern — bm25 alone
-       isn't enough of a gate since the cashname/direction boosts it adds are
-       constant once those are hard-filtered, so a single generic shared word
-       (e.g. "תשלום") could otherwise clear a flat score threshold.
+    Tier 1 — transaction_patterns_db: exact/substring match on the literal
+    DETAILS text (cheap, safe — recurring bank fees use byte-identical
+    wording every time).
+
+    Tier 2 — recommendations_db: fuzzy token match (FTS5/BM25) against what
+    THIS app has learned from documents it created. Requires the same bank
+    account and direction, AND that most of this line's words were already
+    seen in the matched pattern — bm25 alone isn't enough of a gate since the
+    cashname/direction boosts it adds are constant once those are
+    hard-filtered, so a single generic shared word (e.g. "תשלום") could
+    otherwise clear a flat score threshold.
+
+    Tier 3 — live Priority history: the app's local learning starts from
+    zero for anything it hasn't processed yet, but Priority already holds
+    years of real accounting history. For journal-type lines (fees, standing
+    orders, direct debits) we fuzzy-match against real FNCTRANS ledger
+    entries booked on this bank's GL account. For customer receipts (money
+    in) we look up the exact amount in CINVOICES/EINVOICES — only when it
+    maps to exactly one customer, since amount alone can't disambiguate.
     """
     if transaction_patterns_db:
         exact = transaction_patterns_db.find_pattern(details, direction, cashname)
@@ -232,6 +332,24 @@ def _find_auto_match(details, direction, cashname):
                     "accname": top.get("counterpart_account", ""),
                     "accdes":  top.get("counterpart_desc", ""),
                 }
+
+    if bank_gl:
+        best, best_ratio = None, 0.0
+        for entry in _fetch_journal_history(bank_gl, branchname):
+            if entry["direction"] != direction:
+                continue
+            ratio = _token_overlap_ratio(details, entry["details"])
+            if ratio > best_ratio:
+                best, best_ratio = entry, ratio
+        if best and best_ratio >= _REC_MATCH_MIN_OVERLAP:
+            return {"action": "journal", "accname": best["accname"], "accdes": best["accdes"]}
+
+    if direction == "+" and amount:
+        candidates = _fetch_receipt_amount_index().get(round(amount, 2))
+        if candidates and len(candidates) == 1:
+            accname, accdes = next(iter(candidates))
+            return {"action": "receipt", "accname": accname, "accdes": accdes}
+
     return None
 
 
@@ -533,7 +651,10 @@ def receipts_bank_transactions():
                         cashname in credit_card_set or len(cashname.split("-")) != 2
                     ) else ""
                 ),
-                "auto_match":       _find_auto_match(line.get("DETAILS", ""), direction, cashname),
+                "auto_match":       _find_auto_match(
+                    line.get("DETAILS", ""), direction, cashname,
+                    branchname=branch_code, bank_gl=cash_gl_map.get(cashname, ""), amount=amount,
+                ),
             })
 
         return jsonify({"ok": True, "transactions": txns, "days": days,
