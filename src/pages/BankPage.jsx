@@ -786,7 +786,6 @@ export default function BankPage({ mode = 'bank' }) {
     setTransferDetails('תשלום')
     setTransferError('')
     setTransferSuccess('')
-    setTransferAccSugg([])
     setTransferAccFocused(false)
     setTransferDropdownOpen(true)
     setTransferAccFromSugg(false)
@@ -1775,47 +1774,60 @@ export default function BankPage({ mode = 'bank' }) {
               <label>קוד לקוח בפריוריטי (ACCNAME) *</label>
               <input
                 type="text"
-                placeholder="חפש לפי קוד או שם לקוח..."
+                placeholder={allCustomers.length > 0 ? 'חפש לפי קוד או שם לקוח...' : 'לדוגמה: 50440 או שם לקוח'}
                 value={modalAccname}
+                onFocus={() => setReceiptAccFocused(true)}
+                onBlur={e => {
+                  setTimeout(() => setReceiptAccFocused(false), 150)
+                  const v = e.target.value.trim()
+                  if (v.length >= 2) searchOpenInvoices(v, receiptModal)
+                }}
                 onChange={e => {
                   const v = e.target.value
                   setModalAccname(v)
                   setModalAccdes('')
                   setOpenInvoices([])
                   setSelectedInvoices(new Set())
-                  searchAccounts(v, receiptModal?.BRANCHNAME)
-                }}
-                onBlur={e => {
-                  setTimeout(() => setAccSuggestions([]), 200)
-                  const v = e.target.value.trim()
-                  if (v.length >= 2) searchOpenInvoices(v, receiptModal)
                 }}
                 autoFocus={custSuggestions.length === 0}
               />
-              {accSearching && <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש...</p>}
-              {accSuggestions.length > 0 && (
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
-                  {accSuggestions.map(a => (
-                    <button
-                      key={a.accname}
-                      onMouseDown={() => {
-                        setModalAccname(a.accname)
-                        setModalAccdes(a.accdes || '')
-                        setAccSuggestions([])
-                        setOpenInvoices([])
-                        setSelectedInvoices(new Set())
-                        searchOpenInvoices(a.accname, receiptModal)
-                      }}
-                      style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                        border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                        borderBottom: '1px solid #f3f4f6' }}
-                    >
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                      {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {receiptAccFocused && allCustomers.length > 0 && (() => {
+                const q = modalAccname.trim().toLowerCase()
+                const branch = receiptModal?.BRANCHNAME
+                const branchMatches = branch && branch !== '000' ? allCustomers.filter(a => a.branchname === branch) : allCustomers
+                const pool = branchMatches.length > 0 ? branchMatches : allCustomers
+                const filtered = pool
+                  .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .slice(0, 60)
+                if (filtered.length === 0) return null
+                const pick = (a) => {
+                  setModalAccname(a.accname)
+                  setModalAccdes(a.accdes || '')
+                  setReceiptAccFocused(false)
+                  searchOpenInvoices(a.accname, receiptModal)
+                }
+                return (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 200, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
+                    {branch && branch !== '000' && branchMatches.length === 0 && (
+                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
+                        כל הלקוחות (לא נמצאו לקוחות לסניף {branch})
+                      </div>
+                    )}
+                    {filtered.map(a => (
+                      <button
+                        key={a.accname}
+                        onMouseDown={() => pick(a)}
+                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                          borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                        {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               {modalAccdes && (
                 <div style={{ marginTop: 4, fontSize: 13, color: '#15803d', fontWeight: 600 }}>
                   {modalAccdes}
@@ -1978,54 +1990,57 @@ export default function BankPage({ mode = 'bank' }) {
               <label>קוד לקוח (CUSTNAME) *</label>
               <input
                 type="text"
-                placeholder="לדוגמה: 50440 או שם לקוח"
+                placeholder={allCustomers.length > 0 ? 'חפש לפי קוד או שם לקוח...' : 'לדוגמה: 50440 או שם לקוח'}
                 value={irAccname}
+                onFocus={() => setIrAccFocused(true)}
                 onChange={e => {
                   setIrAccname(e.target.value)
                   setIrAccdes('')
-                  searchAccounts(e.target.value, irModal?.BRANCHNAME)
                 }}
                 onBlur={async e => {
                   const v = e.target.value.trim()
-                  setTimeout(() => setAccSuggestions([]), 200)
-                  if (v.length >= 2) {
-                    await loadLastEinvoice(v, irModal?.BRANCHNAME || '', irModal?.SUM1)
-                    if (!irAccdes) {
-                      fetch(`${API}/api/receipts/priority-accounts?q=${encodeURIComponent(v)}&branchname=${encodeURIComponent(irModal?.BRANCHNAME || '')}`)
-                        .then(r => r.json())
-                        .then(d => {
-                          const exact = (d.accounts || []).find(a => a.accname === v || a.accname === `${v}-${irModal?.BRANCHNAME}`)
-                          if (exact) setIrAccdes(exact.accdes)
-                          else if (d.accounts?.length === 1) setIrAccdes(d.accounts[0].accdes)
-                        })
-                        .catch(() => {})
-                    }
-                  }
+                  setTimeout(() => setIrAccFocused(false), 150)
+                  if (v.length >= 2) await loadLastEinvoice(v, irModal?.BRANCHNAME || '', irModal?.SUM1)
                 }}
                 autoFocus={custSuggestions.length === 0}
               />
-              {accSearching && <p style={{ fontSize: 12, color: '#6b7280', margin: '2px 0 0' }}>מחפש...</p>}
-              {accSuggestions.length > 0 && (
-                <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 180, overflowY: 'auto', zIndex: 10, position: 'relative' }}>
-                  {accSuggestions.map(a => (
-                    <button
-                      key={a.accname}
-                      onMouseDown={async () => {
-                        setIrAccname(a.accname)
-                        setIrAccdes(a.accdes)
-                        setAccSuggestions([])
-                        await loadLastEinvoice(a.accname, irModal?.BRANCHNAME || '', irModal?.SUM1)
-                      }}
-                      style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                        border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                        borderBottom: '1px solid #f3f4f6' }}
-                    >
-                      <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{a.accname}</span>
-                      {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
-                    </button>
-                  ))}
-                </div>
-              )}
+              {irAccFocused && allCustomers.length > 0 && (() => {
+                const q = irAccname.trim().toLowerCase()
+                const branch = irModal?.BRANCHNAME
+                const branchMatches = branch && branch !== '000' ? allCustomers.filter(a => a.branchname === branch) : allCustomers
+                const pool = branchMatches.length > 0 ? branchMatches : allCustomers
+                const filtered = pool
+                  .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
+                  .slice(0, 60)
+                if (filtered.length === 0) return null
+                const pick = async (a) => {
+                  setIrAccname(a.accname)
+                  setIrAccdes(a.accdes || '')
+                  setIrAccFocused(false)
+                  await loadLastEinvoice(a.accname, irModal?.BRANCHNAME || '', irModal?.SUM1)
+                }
+                return (
+                  <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 180, overflowY: 'auto', zIndex: 10, position: 'relative' }}>
+                    {branch && branch !== '000' && branchMatches.length === 0 && (
+                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
+                        כל הלקוחות (לא נמצאו לקוחות לסניף {branch})
+                      </div>
+                    )}
+                    {filtered.map(a => (
+                      <button
+                        key={a.accname}
+                        onMouseDown={() => pick(a)}
+                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                          borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#7c3aed' }}>{a.accname}</span>
+                        {a.accdes && <span style={{ color: '#374151', marginRight: 8 }}>{a.accdes}</span>}
+                      </button>
+                    ))}
+                  </div>
+                )
+              })()}
               {irAccdes && <div style={{ marginTop: 4, fontSize: 13, color: '#7c3aed', fontWeight: 600 }}>{irAccdes}</div>}
             </div>
 
@@ -2363,7 +2378,6 @@ export default function BankPage({ mode = 'bank' }) {
                   setTransferAccdes('')
                   setTransferAccFromSugg(false)
                   setTransferDropdownOpen(true)
-                  searchTransferAcc(e.target.value, transferModal?.BRANCHNAME)
                 }}
               />
               {transferAccdes && (
@@ -2377,46 +2391,27 @@ export default function BankPage({ mode = 'bank' }) {
                   )}
                 </div>
               )}
-              {transferDropdownOpen && (allSuppliers.length > 0 || transferAccSugg.length > 0) && (() => {
+              {transferDropdownOpen && allSuppliers.length > 0 && (() => {
                 const q = transferAccname.trim().toLowerCase()
-                const branch = transferModal?.BRANCHNAME
-                const suffix = branch && branch !== '000' ? `-${branch}` : ''
-                const branchFiltered = suffix ? allSuppliers.filter(a => a.accname.endsWith(suffix)) : allSuppliers
-                const pool = branchFiltered.length > 0 ? branchFiltered : allSuppliers
-                const filtered = pool
+                const filtered = allSuppliers
                   .filter(a => q.length === 0 || a.accname.toLowerCase().includes(q) || a.accdes.toLowerCase().includes(q))
                   .slice(0, 60)
-                const supNames = new Set(filtered.map(a => a.accname))
-                const others = transferAccSugg.filter(a => !supNames.has(a.accname)).slice(0, 30)
-                if (filtered.length === 0 && others.length === 0) return null
+                if (filtered.length === 0) return null
                 const pick = (a) => { setTransferAccname(a.accname); setTransferAccdes(a.accdes); setTransferDropdownOpen(false); setTransferAccFromSugg(false) }
-                const row = (a) => (
-                  <button
-                    key={a.accname}
-                    onMouseDown={() => pick(a)}
-                    style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
-                      border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
-                      borderBottom: '1px solid #f3f4f6' }}
-                  >
-                    <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
-                    {a.accdes && <span style={{ color: '#374151', marginRight: 6 }}>{a.accdes}</span>}
-                  </button>
-                )
                 return (
                   <div style={{ border: '1px solid #e5e7eb', borderRadius: 6, marginTop: 2, background: '#fff', maxHeight: 240, overflowY: 'auto', position: 'absolute', width: '100%', zIndex: 20, boxShadow: '0 4px 12px rgba(0,0,0,0.12)' }}>
-                    {suffix && branchFiltered.length === 0 && filtered.length > 0 && (
-                      <div style={{ padding: '6px 10px', fontSize: 12, color: '#9ca3af', borderBottom: '1px solid #f3f4f6' }}>
-                        כל הספקים (לא נמצאו ספקים לסניף {branch})
-                      </div>
-                    )}
-                    {filtered.map(row)}
-                    {others.length > 0 && (
-                      <div style={{ padding: '4px 10px', fontSize: 11, color: '#9ca3af', background: '#f9fafb',
-                        borderTop: filtered.length > 0 ? '1px solid #eef1f6' : 'none', borderBottom: '1px solid #f3f4f6' }}>
-                        כל החשבונות{suffix ? ` (סניף ${branch})` : ''}{transferAccSearching ? ' …' : ''}
-                      </div>
-                    )}
-                    {others.map(row)}
+                    {filtered.map(a => (
+                      <button
+                        key={a.accname}
+                        onMouseDown={() => pick(a)}
+                        style={{ display: 'block', width: '100%', textAlign: 'right', padding: '6px 10px',
+                          border: 'none', background: 'none', cursor: 'pointer', fontSize: 13,
+                          borderBottom: '1px solid #f3f4f6' }}
+                      >
+                        <span style={{ fontFamily: 'monospace', fontWeight: 700, color: '#1d4ed8' }}>{a.accname}</span>
+                        {a.accdes && <span style={{ color: '#374151', marginRight: 6 }}>{a.accdes}</span>}
+                      </button>
+                    ))}
                   </div>
                 )
               })()}
