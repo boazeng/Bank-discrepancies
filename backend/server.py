@@ -77,6 +77,18 @@ http_requests.mount("http://", _prio_adapter)
 http_requests.verify = False  # Priority's cert CA doesn't include key usage extension
 http_requests.exceptions = requests.exceptions  # keep existing `http_requests.exceptions.X`
 
+# Separate session (no retries) for speculative/best-effort lookups that must
+# never block the request they're called from. http_requests' read=2 retries
+# mean a single slow filter can cost ~3x its timeout; on the main transactions
+# list that stacked across several bank accounts and blew past gunicorn's
+# worker timeout, taking the whole endpoint down. These calls fail fast
+# instead — a miss just means no suggestion, not a hung page.
+_prio_fast = requests.Session()
+_prio_fast.mount("https://", HTTPAdapter(max_retries=Retry(total=0), pool_connections=10, pool_maxsize=10))
+_prio_fast.mount("http://", HTTPAdapter(max_retries=Retry(total=0), pool_connections=10, pool_maxsize=10))
+_prio_fast.verify = False
+_PRIO_FAST_TIMEOUT = 6
+
 import threading
 _gl_cache_lock = threading.Lock()  # serialize bank-GL cache writes during parallel resolution
 from flask import Flask, jsonify, send_file, request, send_from_directory
@@ -221,11 +233,11 @@ def _fetch_journal_history(gl_account, branchname):
     try:
         since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
         flt = f"BRANCHNAME eq '{branchname}' and FNCDATE ge {since}" if branchname else f"FNCDATE ge {since}"
-        r = http_requests.get(
+        r = _prio_fast.get(
             f"{_prio_url()}/FNCTRANS?$filter={flt}"
             "&$expand=FNCITEMS_SUBFORM($select=ACCNAME,ACCDES,DETAILS,DEBIT1,CREDIT1)"
             "&$select=FNCNUM&$top=300",
-            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=25, verify=False,
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=_PRIO_FAST_TIMEOUT, verify=False,
         )
         r.raise_for_status()
         for row in r.json().get("value", []):
@@ -269,10 +281,10 @@ def _fetch_receipt_amount_index():
         since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
         for entity, extra_filter in (("CINVOICES", " and STATDES ne 'מבוטלת'"), ("EINVOICES", "")):
             flt = f"IVDATE ge {since}{extra_filter}"
-            r = http_requests.get(
+            r = _prio_fast.get(
                 f"{_prio_url()}/{entity}?$filter={flt}"
                 "&$select=CUSTNAME,CDES,TOTPRICE,BRANCHNAME&$top=3000",
-                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=25, verify=False,
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=_PRIO_FAST_TIMEOUT, verify=False,
             )
             if not r.ok:
                 continue
@@ -2348,9 +2360,13 @@ def customer_search():
         return jsonify({"ok": False, "error": str(e)}), 500
 
 
-def _query_open_invoices(accname, branchname=""):
+def _query_open_invoices(accname, branchname="", session=None, timeout=20):
     """Open (unreconciled) CINVOICES for a customer. Shared by the open-invoices
-    endpoint and the auto-match receipt tier's invoice-closing suggestion."""
+    endpoint (reliable, retrying session — a deliberate user action worth
+    waiting for) and the auto-match receipt tier's invoice-closing suggestion
+    (fast/no-retry session — a background suggestion, must not risk hanging
+    the transactions list)."""
+    session = session or http_requests
     base_accname = accname.split("-")[0] if "-" in accname else accname
     flt = f"CUSTNAME eq '{base_accname}' and STATDES ne 'מבוטלת'"
 
@@ -2362,11 +2378,11 @@ def _query_open_invoices(accname, branchname=""):
 
     invoices = []
     for f_try in filters_to_try:
-        r = http_requests.get(
+        r = session.get(
             f"{_prio_url()}/CINVOICES?$filter={f_try}"
             "&$select=IVNUM,CUSTNAME,CDES,IVDATE,TOTPRICE,STATDES,BRANCHNAME,IVRECONDATE"
             "&$orderby=IVDATE desc&$top=50",
-            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=20,
+            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=timeout,
         )
         r.raise_for_status()
         all_inv = r.json().get("value", [])
@@ -2376,16 +2392,33 @@ def _query_open_invoices(accname, branchname=""):
     return invoices
 
 
+_OPEN_INV_CACHE_TTL = 60
+_open_inv_cache = {}  # (accname, branchname) -> (fetched_at, [invoices])
+
+
 def _find_receipt_open_invoice(accname, amount, branchname):
     """An open invoice to auto-attach to a suggested receipt, so the one-click
     confirm closes it too — only when exactly one open invoice for this
     customer matches the bank amount. Ambiguous (0 or 2+) stays unattached;
-    the user picks manually via the receipt modal instead."""
-    try:
-        invoices = _query_open_invoices(accname, branchname)
-    except Exception as _e:
-        logger.warning(f"_find_receipt_open_invoice({accname}) failed: {_e}")
-        return []
+    the user picks manually via the receipt modal instead. Uses the fast/
+    no-retry session, short-TTL cached per customer: this can run once per
+    receipt-matched line in the bulk transactions list (often the same
+    recurring customer on several lines), so neither a single slow lookup
+    nor repeat lookups for the same customer may stall the page."""
+    import time as _time_mod
+    key = (accname, branchname)
+    now = _time_mod.time()
+    cached = _open_inv_cache.get(key)
+    if cached and now - cached[0] < _OPEN_INV_CACHE_TTL:
+        invoices = cached[1]
+    else:
+        try:
+            invoices = _query_open_invoices(accname, branchname, session=_prio_fast, timeout=_PRIO_FAST_TIMEOUT)
+        except Exception as _e:
+            logger.warning(f"_find_receipt_open_invoice({accname}) failed: {_e}")
+            invoices = []
+        _open_inv_cache[key] = (now, invoices)
+
     matches = [inv for inv in invoices if abs(float(inv.get("TOTPRICE") or 0) - amount) < 0.01]
     return matches if len(matches) == 1 else []
 
