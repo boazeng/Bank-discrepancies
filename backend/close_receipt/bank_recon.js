@@ -150,15 +150,113 @@ async function main() {
     return;
   }
 
-  // Step 5: CREDITRECONSP (התאמה אוטומטית — basic bank matching) + CLOSECREDITRECONSP
-  // BANKRECONSP manual row marking is not usable — the form requires CASHNAME context
-  // that the Priority SDK cannot set when opening the form standalone. The only working
-  // approach is CREDITRECONSP (option 1 = basic bank matching), which finds pairs by
-  // amount + date + cashname and populates an internal work surface, then
-  // CLOSECREDITRECONSP finalises those pairs and updates BANKLINESA.ERECONNUM.
-  process.stderr.write('Running CREDITRECONSP (bank auto-match) + CLOSECREDITRECONSP\n');
+  // Step 5: BANKRECONSP (split reconciliation surface) — mark matching row RECON=Y
+  // CREDITRECONSP never finds pairs in this company because it needs the BANKRECON work table
+  // to be pre-populated (only done by Priority's browser session, not via API).
+  // BANKRECONSP is a direct view of BANKLINESA+FNCTRANS entries: when unreconciled entries
+  // exist, the form returns them as rows. We find our specific row and mark RECON=Y, then
+  // CLOSEBANKRECONISP creates the reconciliation record.
+  // Fallback: CREDITRECONSP as backup in case BANKRECONSP approach fails.
+  process.stderr.write('Attempting BANKRECONSP reconciliation\n');
+
+  // Determine the credit/debit amount of our bank line for matching
+  let bankLineCredit = 0, bankLineDebit = 0;
+  if (bankPage && kline) {
+    try {
+      const blAmt = await withTimeout(
+        fetch(`${odataBase}/BANKLINESA(BANKPAGE=${bankPage},KLINE=${kline})?$select=CREDIT,DEBIT`, { headers: readHeaders }),
+        10000, 'GET BANKLINESA amounts'
+      );
+      if (blAmt.ok) {
+        const d = await blAmt.json();
+        bankLineCredit = d.CREDIT || 0;
+        bankLineDebit  = d.DEBIT  || 0;
+        process.stderr.write(`Bank line amounts: CREDIT=${bankLineCredit} DEBIT=${bankLineDebit}\n`);
+      }
+    } catch (e) {
+      process.stderr.write(`BANKLINESA amounts (non-fatal): ${e.message}\n`);
+    }
+  }
+  const bankAmount = bankLineCredit || bankLineDebit;
+
   try {
-    // CREDITRECONSP: choose option 1 = "התאמת בנק בסיסית" (basic bank matching)
+    // Initialize bank account context (selects the configured bank account for reconciliation)
+    let nbr = await withTimeout(priority.procStart('NEXTBANKRECON', 'P', null, company), 15000, 'NEXTBANKRECON');
+    while (nbr && nbr.type !== 'end' && nbr.type !== 'finished') {
+      if (nbr.type === 'message') nbr = await withTimeout(nbr.proc.message(1), 10000, 'NBR.msg');
+      else if (nbr.proc?.continueProc) nbr = await withTimeout(nbr.proc.continueProc(), 15000, 'NBR.cont');
+      else break;
+    }
+    process.stderr.write('NEXTBANKRECON done\n');
+
+    // Open BANKRECONSP — shows unreconciled BANKLINESA and FNCTRANS rows when they exist
+    const sp = await withTimeout(priority.formStart('BANKRECONSP', null, null, company), 30000, 'formStart BANKRECONSP');
+    const rawRows = await withTimeout(sp.getRows(0), 30000, 'getRows BANKRECONSP');
+
+    // SDK returns { 'BANKRECONSP': [...] } or flat array
+    const spRows = Array.isArray(rawRows)
+      ? rawRows
+      : (Object.values(rawRows || {}).find(v => Array.isArray(v)) || []);
+    process.stderr.write(`BANKRECONSP rows visible: ${spRows.length}\n`);
+
+    // Find matching rows:
+    //   Bank-side row:  FRST_SUM == bankAmount  AND  FRST_BOOKNUM == bpnuma (if known)
+    //   Books-side row: SCND_IVNUM == resolvedFncnum  OR  SCND_SUM == bankAmount
+    const matchRow = (row) => {
+      const bankMatch = bankAmount > 0 && Math.abs((row.FRST_SUM || 0) - bankAmount) < 0.01;
+      const bpMatch   = bpnuma && row.FRST_BOOKNUM === bpnuma;
+      const fncMatch  = resolvedFncnum && row.SCND_IVNUM === resolvedFncnum;
+      const booksAmt  = bankAmount > 0 && Math.abs((row.SCND_SUM || 0) - bankAmount) < 0.01;
+      return (bankMatch && (bpMatch || !bpnuma)) || fncMatch || (booksAmt && fncMatch);
+    };
+
+    let markedCount = 0;
+    for (let i = 0; i < spRows.length; i++) {
+      const row = spRows[i];
+      if (row.RECON === 'Y') continue;
+      if (!matchRow(row)) continue;
+
+      process.stderr.write(
+        `Marking row[${i}]: FRST_BOOKNUM=${row.FRST_BOOKNUM} FRST_SUM=${row.FRST_SUM} ` +
+        `SCND_IVNUM=${row.SCND_IVNUM} SCND_SUM=${row.SCND_SUM}\n`
+      );
+      try {
+        await withTimeout(sp.setActiveRow(i), 10000, `setActiveRow[${i}]`);
+        await withTimeout(sp.fieldUpdate('RECON', 'Y'), 10000, `fieldUpdate RECON[${i}]`);
+        await withTimeout(sp.saveRow(0), 20000, `saveRow[${i}]`);
+        markedCount++;
+        process.stderr.write(`Row[${i}] marked RECON=Y\n`);
+      } catch (rowErr) {
+        process.stderr.write(`Mark row[${i}] failed (non-fatal): ${rowErr.message}\n`);
+      }
+    }
+
+    if (markedCount > 0) {
+      // CLOSEBANKRECONISP finalises RECON=Y-marked pairs into reconciliation records
+      let cbi = await withTimeout(priority.procStart('CLOSEBANKRECONISP', 'P', null, company), 15000, 'CLOSEBANKRECONISP');
+      while (cbi && cbi.type !== 'end' && cbi.type !== 'finished') {
+        const ct = cbi.type;
+        process.stderr.write(`CLOSEBANKRECONISP type=${ct} msg=${(cbi.message || '').slice(0, 80)}\n`);
+        if (ct === 'message') cbi = await withTimeout(cbi.proc.message(1), 15000, 'CBI.msg');
+        else if (ct === 'inputFields') {
+          const f = (cbi.input?.EditFields || []).map(x => ({ field: x.field, op: 0, value: x.value || '', op2: 0, value2: '' }));
+          cbi = await withTimeout(cbi.proc.inputFields(1, { EditFields: f }), 15000, 'CBI.if');
+        } else if (cbi.proc?.continueProc) cbi = await withTimeout(cbi.proc.continueProc(), 30000, 'CBI.cont');
+        else break;
+      }
+      process.stderr.write('CLOSEBANKRECONISP done\n');
+    } else {
+      process.stderr.write('BANKRECONSP: no matching rows to mark (entry may not exist yet, already reconciled, or USER context missing)\n');
+    }
+
+    await sp.endCurrentForm(false).catch(() => {});
+  } catch (e) {
+    process.stderr.write(`BANKRECONSP (non-fatal): ${e.message}\n`);
+  }
+
+  // Step 5b: CREDITRECONSP fallback (usually finds 0 pairs but kept as safety net)
+  process.stderr.write('Running CREDITRECONSP fallback\n');
+  try {
     let step = await withTimeout(
       priority.procStart('CREDITRECONSP', 'P', null, company),
       30000, 'procStart CREDITRECONSP'
@@ -184,9 +282,6 @@ async function main() {
     }
     process.stderr.write('CREDITRECONSP done\n');
 
-    // CLOSECREDITRECONSP: close auto-matched pairs
-    // Steps: message("להמשיך בפעולה?") → inputFields(USER=<default>) → end
-    // Note: "לא קיימים שורות" before end = no pairs found (CREDITRECONSP had nothing to match)
     let step2 = await withTimeout(
       priority.procStart('CLOSECREDITRECONSP', 'P', null, company),
       30000, 'procStart CLOSECREDITRECONSP'
@@ -195,20 +290,14 @@ async function main() {
     let noRowsFound = false;
     while (step2 && d2 < 10) {
       const t = step2.type;
-      process.stderr.write(`  CLOSECREDITRECONSP[${d2}] type=${t} msg=${(step2.message || '').slice(0, 80)}\n`);
-      if (t === 'end' || t === 'finished') { reconOk = !noRowsFound; break; }
+      if (t === 'end' || t === 'finished') { if (!noRowsFound) reconOk = true; break; }
       if (t === 'message' && step2.proc?.message) {
-        if ((step2.message || '').includes('לא קיימים')) {
-          noRowsFound = true;
-          process.stderr.write('  CLOSECREDITRECONSP: no rows to close (CREDITRECONSP found 0 pairs)\n');
-        }
+        if ((step2.message || '').includes('לא קיימים')) noRowsFound = true;
         step2 = await withTimeout(step2.proc.message(1), 30000, `CLOSECREDITRECONSP.msg${d2}`);
       } else if (t === 'inputFields' && step2.proc?.inputFields) {
-        // USER field (ID=18 by default) — submit with the pre-filled default value
         const fields = (step2.input?.EditFields || []).map(f => ({
           field: f.field, op: 0, value: f.value || '', op2: 0, value2: f.value1 || '',
         }));
-        process.stderr.write(`  CLOSECREDITRECONSP inputFields: ${JSON.stringify(fields)}\n`);
         step2 = await withTimeout(step2.proc.inputFields(1, { EditFields: fields }), 30000, `CLOSECREDITRECONSP.input${d2}`);
       } else if (step2.proc?.continueProc) {
         step2 = await withTimeout(step2.proc.continueProc(), 60000, `CLOSECREDITRECONSP.cont${d2}`);
