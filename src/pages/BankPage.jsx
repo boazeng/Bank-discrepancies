@@ -1132,9 +1132,12 @@ export default function BankPage({ mode = 'bank' }) {
                   {match && (
                     <div style={{ fontSize: 11, color: '#15803d', marginTop: 2 }}>
                       <div>
-                        {mStyle?.label} ← <strong>{match.accdes || match.accname}</strong>
-                        {(match.open_invoices?.[0]?.CUSTNAME || match.accname) && (
-                          <> · לקוח {match.open_invoices?.[0]?.CUSTNAME || match.accname.split('-')[0]}</>
+                        {mStyle?.label} ← <strong>
+                          {match.accname}{match.accdes ? ` – ${match.accdes}` : ''}
+                        </strong>
+                        {(match.action === 'receipt' || match.action === 'invoice_receipt')
+                          && match.open_invoices?.[0]?.CUSTNAME && (
+                          <> · לקוח {match.open_invoices[0].CUSTNAME}</>
                         )}
                       </div>
                       {match.open_invoices?.length > 0 && (
