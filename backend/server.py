@@ -251,11 +251,14 @@ def _fetch_journal_history(gl_account, branchname):
 
 
 def _fetch_receipt_amount_index():
-    """TTL-cached amount → customer index from real CINVOICES/EINVOICES history.
-    Only usable as a suggestion where a given amount maps to exactly one
-    customer across two years of history — bank DETAILS text carries no
-    reusable customer identity, so amount is the only signal we have, and an
-    ambiguous amount (multiple customers) must not auto-suggest either one."""
+    """TTL-cached (amount, branch) → customer index from real CINVOICES/EINVOICES
+    history. Only usable as a suggestion where a given amount maps to exactly
+    one customer *in the same branch* across two years of history — bank
+    DETAILS text carries no reusable customer identity, so amount is the only
+    signal we have, and an ambiguous amount (multiple customers) must not
+    auto-suggest either one. Branch is a hard key, not a filter: a branch-102
+    transaction must never surface a branch-109 customer just because two
+    branches happened to share a round number."""
     import time as _time_mod
     now = _time_mod.time()
     if now - _prio_receipt_hist_cache["fetched_at"] < _PRIO_HIST_TTL and _prio_receipt_hist_cache["index"]:
@@ -280,7 +283,7 @@ def _fetch_receipt_amount_index():
                     continue
                 branchn = (inv.get("BRANCHNAME") or "").strip()
                 accname = f"{cust}-{branchn}" if branchn and branchn != "000" else cust
-                index.setdefault(amt, set()).add((accname, (inv.get("CDES") or "").strip()))
+                index.setdefault((amt, branchn), set()).add((accname, (inv.get("CDES") or "").strip()))
     except Exception as _e:
         logger.warning(f"_fetch_receipt_amount_index failed: {_e}")
 
@@ -325,6 +328,7 @@ def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", am
         if candidates:
             top = candidates[0]
             if (top.get("cashname") == cashname and top.get("direction") == direction
+                    and top.get("branch") == branchname
                     and (top.get("score") or 0) >= _REC_MATCH_MIN_SCORE
                     and _token_overlap_ratio(details, top.get("details", "")) >= _REC_MATCH_MIN_OVERLAP):
                 return {
@@ -345,7 +349,7 @@ def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", am
             return {"action": "journal", "accname": best["accname"], "accdes": best["accdes"]}
 
     if direction == "+" and amount:
-        candidates = _fetch_receipt_amount_index().get(round(amount, 2))
+        candidates = _fetch_receipt_amount_index().get((round(amount, 2), branchname))
         if candidates and len(candidates) == 1:
             accname, accdes = next(iter(candidates))
             return {"action": "receipt", "accname": accname, "accdes": accdes}
