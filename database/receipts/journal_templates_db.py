@@ -30,9 +30,13 @@ def get_suggestion(details):
     if key in data:
         entry = data[key]
         return entry.get("counterpart_account", ""), entry.get("counterpart_desc", "")
-    # Partial match: check if any stored key is a substring of details or vice-versa
+    # Partial match: only when the full saved (specific) phrase appears inside
+    # this line's details — never the reverse. A short/generic line (e.g.
+    # "העברה מהבנק") must not inherit the account of a longer, more specific
+    # saved phrase (e.g. "העברה מהבנק-פלסקוב") just because it's a prefix of
+    # it; that would apply one counterparty's account to any transfer.
     for stored_key, entry in data.items():
-        if stored_key and (stored_key in key or key in stored_key):
+        if stored_key and stored_key in key:
             return entry.get("counterpart_account", ""), entry.get("counterpart_desc", "")
     return None, None
 

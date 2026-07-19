@@ -48,7 +48,11 @@ def find_pattern(details, direction=None, cashname=None):
 
     Match priority:
     1. Exact normalised DETAILS (+ optional direction check)
-    2. Stored key is a substring of details or vice-versa
+    2. Stored key is a substring of details — never the reverse: a short/
+       generic line (e.g. "העברה מהבנק") must not inherit the account of a
+       longer, more specific saved pattern (e.g. "העברה מהבנק-פלסקוב") just
+       because it's a prefix of it; that would apply one counterparty's
+       account to any similarly-worded but unrelated transfer.
     Ignores cashname — same description in different banks should reuse.
     """
     data = _load()
@@ -61,11 +65,10 @@ def find_pattern(details, direction=None, cashname=None):
     if key in data and _dir_ok(data[key]):
         return data[key]
 
-    # 2. Substring
+    # 2. Substring (one direction only, see docstring)
     for stored_key, p in data.items():
-        if stored_key and _dir_ok(p):
-            if stored_key in key or key in stored_key:
-                return p
+        if stored_key and _dir_ok(p) and stored_key in key:
+            return p
 
     return None
 
