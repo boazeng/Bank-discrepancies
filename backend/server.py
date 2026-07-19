@@ -368,11 +368,15 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
     Tier 1b — journal_templates_db: the per-DETAILS counterpart-account
     template saved whenever a journal entry is finalized (also what powers
     the auto-fill in the journal modal, see /api/receipts/journal-template).
-    Same exact/substring key match as tier 1, kept separate because it's
-    direction/cashname-agnostic and always implies action="journal" — without
-    this, a recurring journal line (e.g. municipal property tax) would only
-    ever get its account auto-filled once the user manually opened the
-    journal modal, never surfaced as a green row-level suggestion up front.
+    Same substring-match shape as tier 1, kept separate because it's
+    cashname-agnostic and always implies action="journal" — without this, a
+    recurring journal line (e.g. municipal property tax) would only ever get
+    its account auto-filled once the user manually opened the journal modal,
+    never surfaced as a green row-level suggestion up front. Restricted to
+    direction="-": the template store itself doesn't track direction, so
+    without this gate an incoming receipt could get hijacked into a
+    "journal" label before tier 3's amount-based receipt lookup below ever
+    runs, losing the invoice-closing details that lookup attaches.
 
     Tier 2 — recommendations_db: fuzzy token match (FTS5/BM25) against what
     THIS app has learned from documents it created. Requires the same bank
@@ -403,7 +407,13 @@ def _find_auto_match_core(details, direction, cashname, branchname="", bank_gl="
                 exact = {**exact, "accname": _with_branch(exact["accname"], branchname)}
             return exact
 
-    if journal_templates_db:
+    if journal_templates_db and direction == "-":
+        # journal_templates_db doesn't track direction at all, so without this
+        # gate an incoming receipt whose DETAILS happens to substring-match a
+        # saved journal template would be hijacked here — mislabeled
+        # "journal" before Tier 3 ever gets a chance to run the amount-based
+        # receipt/invoice lookup below, silently losing the invoice-closing
+        # detail that lookup attaches.
         tpl_acc, tpl_desc = journal_templates_db.get_suggestion(details)
         if tpl_acc:
             return {"action": "journal", "accname": _with_branch(tpl_acc, branchname), "accdes": tpl_desc or ""}
