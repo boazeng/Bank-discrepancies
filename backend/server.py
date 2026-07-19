@@ -1811,10 +1811,13 @@ def bank_line_create_transfer():
                 wtax_percent = 0
                 logger.warning(f"Could not read WTAXPERCENT for {ivnum}: {e}")
 
-            # Step 3: if withholding applies, recalculate gross and patch QPRICE
+            # Step 3: if withholding applies, recalculate gross and patch QPRICE.
+            # Net (amount) must stay exact — only the withholding is rounded to a
+            # whole shekel (round-half-up), then gross = net + rounded withholding.
             if wtax_percent:
-                gross_amount = round(amount / (1 - wtax_percent / 100), 2)
-                wtax_amount  = round(gross_amount - amount, 2)
+                wtax_raw     = amount / (1 - wtax_percent / 100) - amount
+                wtax_amount  = int(wtax_raw + 0.5)
+                gross_amount = round(amount + wtax_amount, 2)
                 try:
                     patch_resp = http_requests.patch(
                         f"{_prio_url()}/QINVOICES({q_key})",
