@@ -217,6 +217,32 @@ export default function BankPage({ mode = 'bank' }) {
     }
   }, [days, branchFilter, bankFilter])
 
+  // Lightweight post-action refresh: most actions just move ONE bank line out
+  // of the unmatched list into a draft/done record. Re-running the full
+  // bank-transactions fetch would recompute the live-Priority auto-match
+  // suggestion for every remaining unmatched line (expensive on a cold cache —
+  // see the `deadline` budget in server.py), so instead we drop the row
+  // locally and only refetch the cheap, DB-backed approved/done-list endpoints.
+  const refreshLight = useCallback(async (removeFncnum) => {
+    if (removeFncnum) {
+      setBankTxns(prev => prev.filter(t => t.FNCNUM !== removeFncnum))
+    }
+    try {
+      const [a, doneRes] = await Promise.all([
+        fetch(`${API}/api/receipts/approved`).then(r => r.json()),
+        fetch(`${API}/api/receipts/action-queue/done-list`).then(r => r.json()),
+      ])
+      if (a.ok) {
+        const all = a.receipts || []
+        setDraftReceipts(all.filter(r => r.status !== 'closed'))
+        setClosedReceipts(all.filter(r => r.status === 'closed'))
+      }
+      if (doneRes.ok) setDoneActions(doneRes.items || [])
+    } catch (e) {
+      setError('שגיאה בטעינת נתונים: ' + e.message)
+    }
+  }, [])
+
   useEffect(() => { loadAll() }, [loadAll])
 
   async function closeReceipt(rec) {
@@ -226,7 +252,7 @@ export default function BankPage({ mode = 'bank' }) {
       const resp = await fetch(`${API}/api/receipts/${rec.id}/close`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) throw new Error(data.error || 'שגיאה')
-      await loadAll()
+      await refreshLight()
       const rcLine  = data.rc_ivnum ? `\nמספר קבלה סופי: ${data.rc_ivnum}` : ''
       const fncLine = data.fncnum   ? `\nמספר תנועת יומן: ${data.fncnum}`  : ''
       alert(`קבלה ${rec.priority_ivnum} נסגרה בהצלחה${rcLine}${fncLine}`)
@@ -244,7 +270,7 @@ export default function BankPage({ mode = 'bank' }) {
       const resp = await fetch(`${API}/api/receipts/${rec.id}/close-einvoice`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) throw new Error(data.error || 'שגיאה')
-      await loadAll()
+      await refreshLight()
       const finalNum = data.final_ivnum && data.final_ivnum !== rec.priority_ivnum
         ? data.final_ivnum : (data.final_ivnum || rec.priority_ivnum)
       const fncLine = data.fncnum ? `\nמספר תנועת יומן: ${data.fncnum}` : ''
@@ -262,7 +288,7 @@ export default function BankPage({ mode = 'bank' }) {
       const resp = await fetch(`${API}/api/receipts/${rec.id}/refresh-final`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) throw new Error(data.error || 'שגיאה')
-      await loadAll()
+      await refreshLight()
       const finalLine = data.final_ivnum
         ? `\nמספר חשבונית סופי: ${data.final_ivnum}`
         : data.rc_ivnum
@@ -285,7 +311,7 @@ export default function BankPage({ mode = 'bank' }) {
       const resp = await fetch(`${API}/api/receipts/${rec.id}/delete`, { method: 'POST' })
       const data = await resp.json()
       if (!data.ok) throw new Error(data.error || 'שגיאה')
-      await loadAll()
+      await refreshLight()
     } catch (e) {
       alert('שגיאה במחיקה: ' + e.message)
     } finally {
@@ -374,7 +400,7 @@ export default function BankPage({ mode = 'bank' }) {
     setOpenInvoices([])
     setSelectedInvoices(new Set())
     setExistingRc(null)
-    await loadAll()
+    await refreshLight(txn.FNCNUM)
   }
 
   async function submitReceipt() {
@@ -406,7 +432,7 @@ export default function BankPage({ mode = 'bank' }) {
         throw new Error(prioMsg || data.error || 'שגיאה')
       }
       setDraftInfo({ ivnum: data.priority_ivnum })
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
     } catch (e) {
       setModalError(e.message)
     } finally {
@@ -438,7 +464,7 @@ export default function BankPage({ mode = 'bank' }) {
       setOpenInvoices([])
       setSelectedInvoices(new Set())
       setExistingRc(null)
-      await loadAll()
+      await refreshLight()
     } catch (e) {
       setModalError(e.message)
     } finally {
@@ -466,7 +492,7 @@ export default function BankPage({ mode = 'bank' }) {
       })
       const data = await resp.json()
       if (!data.ok) throw new Error(data.error || 'שגיאה')
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
     } catch (e) {
       alert('שגיאה: ' + e.message)
     } finally {
@@ -610,7 +636,7 @@ export default function BankPage({ mode = 'bank' }) {
         throw new Error(pMsg)
       }
       setIrDraftInfo({ ivnum: data.priority_ivnum })
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
     } catch (e) {
       setIrError(e.message)
     } finally {
@@ -639,7 +665,7 @@ export default function BankPage({ mode = 'bank' }) {
       setLastIvnum(irDraftInfo.ivnum)
       setIrDraftInfo(null)
       setIrModal(null)
-      await loadAll()
+      await refreshLight()
     } catch (e) {
       setIrError(e.message)
     } finally {
@@ -772,7 +798,7 @@ export default function BankPage({ mode = 'bank' }) {
         data.detail?.error?.message ||
         data.error || 'שגיאה'
       )
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
     } catch (e) {
       alert('שגיאה באישור מהיר: ' + e.message)
     } finally {
@@ -896,7 +922,7 @@ export default function BankPage({ mode = 'bank' }) {
         data.error || 'שגיאה'
       )
       setTransferSuccess(data.ivnum ? `העברה בנקאית נוצרה: ${data.ivnum}` : 'העברה בנקאית נוצרה בהצלחה')
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
       setTimeout(() => { setTransferModal(null); setTransferSuccess('') }, 2000)
     } catch (e) {
       setTransferError(e.message)
@@ -953,7 +979,7 @@ export default function BankPage({ mode = 'bank' }) {
       const data = await resp.json()
       if (!data.ok) throw new Error((data.detail?.error?.message) || data.error || 'שגיאה')
       setJournalSuccess(data.fncnum ? `פקודת יומן נוצרה: ${data.fncnum}` : 'פקודת יומן נוצרה בהצלחה')
-      await loadAll()
+      await refreshLight(txn.FNCNUM)
       setTimeout(() => { setJournalModal(null); setJournalSuccess('') }, 2000)
     } catch (e) {
       setJournalError(e.message)
