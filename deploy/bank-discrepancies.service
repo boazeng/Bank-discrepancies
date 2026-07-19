@@ -16,11 +16,14 @@ Environment=PATH=/home/ec2-user/Bank-discrepancies/.venv/bin:/usr/local/bin:/usr
 # Bind to localhost only — nginx is the public-facing reverse proxy.
 # Single worker so the in-process Priority auto-match/bank-lines caches
 # (server.py) are shared across every request instead of split across
-# processes with no way to warm each other — see Dockerfile for the same.
+# processes with no way to warm each other. --threads only takes effect
+# with --worker-class gthread — without it, gunicorn defaults to sync,
+# which serves one request at a time total regardless of --threads.
 ExecStart=/home/ec2-user/Bank-discrepancies/.venv/bin/gunicorn \
     --chdir /home/ec2-user/Bank-discrepancies/backend \
     --bind 127.0.0.1:5000 \
     --workers 1 \
+    --worker-class gthread \
     --threads 4 \
     --timeout 120 \
     --access-logfile - \

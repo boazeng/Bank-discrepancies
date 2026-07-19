@@ -37,8 +37,11 @@ EXPOSE 5000
 
 # Single worker so the in-process Priority auto-match/bank-lines caches
 # (server.py) are shared across every request instead of split across
-# processes with no way to warm each other — 4 threads still gives plenty
-# of concurrency for this team's traffic.
+# processes with no way to warm each other. --threads only takes effect
+# with --worker-class gthread — without it gunicorn defaults to sync,
+# where a "sync" worker handles exactly one request at a time no matter
+# what --threads says, so this single worker would serve one request at
+# a time total instead of 4 concurrently.
 CMD ["gunicorn", "--chdir", "backend", "--bind", "0.0.0.0:5000", \
-     "--workers", "1", "--threads", "4", "--timeout", "120", \
-     "--access-logfile", "-", "server:app"]
+     "--workers", "1", "--worker-class", "gthread", "--threads", "4", \
+     "--timeout", "120", "--access-logfile", "-", "server:app"]
