@@ -10,6 +10,7 @@ import json
 import tempfile
 import importlib.util
 import logging
+import time
 from pathlib import Path
 from datetime import datetime
 try:
@@ -229,7 +230,7 @@ _prio_journal_hist_cache = {}   # (gl_account, branchname) -> (fetched_at, [entr
 _prio_receipt_hist_cache = {"fetched_at": 0.0, "index": {}}  # amount(2dp) -> {(accname, accdes)}
 
 
-def _fetch_journal_history(gl_account, branchname, deadline=None):
+def _fetch_journal_history(gl_account, branchname, deadline=None, force=False):
     """TTL-cached fetch of real Priority ledger history for a bank GL account:
     every FNCTRANS booked against it, paired with its counterpart account.
     This is the company's actual accounting history — years of it, including
@@ -237,17 +238,19 @@ def _fetch_journal_history(gl_account, branchname, deadline=None):
     has learned locally, so it works from the very first transaction.
 
     `deadline`: past it, skip a cold-cache fetch entirely (return whatever's
-    cached, even if stale, or empty) — see _find_auto_match for why."""
-    import time as _time_mod
+    cached, even if stale, or empty) — see _find_auto_match for why.
+    `force`: bypass the TTL check (used by the background warmer to refresh
+    a key before it expires, off the request path)."""
     key = (gl_account, branchname)
-    now = _time_mod.time()
+    now = time.time()
     cached = _prio_journal_hist_cache.get(key)
-    if cached and now - cached[0] < _PRIO_HIST_TTL:
+    if not force and cached and now - cached[0] < _PRIO_HIST_TTL:
         return cached[1]
-    if deadline is not None and now >= deadline:
+    if not force and deadline is not None and now >= deadline:
         return cached[1] if cached else []
 
-    entries = []
+    entries = None  # None marks "fetch failed" — keeps the old cached value below,
+                     # rather than a transient error wiping out real (still-valid) history.
     try:
         since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
         flt = f"BRANCHNAME eq '{branchname}' and FNCDATE ge {since}" if branchname else f"FNCDATE ge {since}"
@@ -258,6 +261,7 @@ def _fetch_journal_history(gl_account, branchname, deadline=None):
             headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=_PRIO_FAST_TIMEOUT, verify=False,
         )
         r.raise_for_status()
+        entries = []
         for row in r.json().get("value", []):
             items = row.get("FNCITEMS_SUBFORM", []) or []
             bank_leg = next((it for it in items if it.get("ACCNAME") == gl_account), None)
@@ -276,11 +280,13 @@ def _fetch_journal_history(gl_account, branchname, deadline=None):
     except Exception as _e:
         logger.warning(f"_fetch_journal_history({gl_account}) failed: {_e}")
 
+    if entries is None:
+        return cached[1] if cached else []
     _prio_journal_hist_cache[key] = (now, entries)
     return entries
 
 
-def _fetch_receipt_amount_index(deadline=None):
+def _fetch_receipt_amount_index(deadline=None, force=False):
     """TTL-cached (amount, branch) → customer index from real CINVOICES/EINVOICES
     history. Only usable as a suggestion where a given amount maps to exactly
     one customer *in the same branch* across two years of history — bank
@@ -291,17 +297,20 @@ def _fetch_receipt_amount_index(deadline=None):
     branches happened to share a round number.
 
     `deadline`: past it, skip a cold-cache fetch entirely (return whatever's
-    cached, even if stale, or empty) — see _find_auto_match for why."""
-    import time as _time_mod
-    now = _time_mod.time()
-    if now - _prio_receipt_hist_cache["fetched_at"] < _PRIO_HIST_TTL and _prio_receipt_hist_cache["index"]:
+    cached, even if stale, or empty) — see _find_auto_match for why.
+    `force`: bypass the TTL check (used by the background warmer to refresh
+    the index before it expires, off the request path)."""
+    now = time.time()
+    if not force and now - _prio_receipt_hist_cache["fetched_at"] < _PRIO_HIST_TTL and _prio_receipt_hist_cache["index"]:
         return _prio_receipt_hist_cache["index"]
-    if deadline is not None and now >= deadline:
+    if not force and deadline is not None and now >= deadline:
         return _prio_receipt_hist_cache["index"]
 
-    index = {}
+    index = None  # None marks "fetch failed" — keeps the old cached index below,
+                   # rather than a transient error wiping out real (still-valid) data.
     try:
         since = (_now_il().replace(year=_now_il().year - 2)).strftime("%Y-%m-%dT00:00:00Z")
+        index = {}
         for entity, extra_filter in (("CINVOICES", " and STATDES ne 'מבוטלת'"), ("EINVOICES", "")):
             flt = f"IVDATE ge {since}{extra_filter}"
             r = _prio_fast.get(
@@ -322,9 +331,32 @@ def _fetch_receipt_amount_index(deadline=None):
     except Exception as _e:
         logger.warning(f"_fetch_receipt_amount_index failed: {_e}")
 
+    if index is None:
+        return _prio_receipt_hist_cache["index"]
     _prio_receipt_hist_cache["fetched_at"] = now
     _prio_receipt_hist_cache["index"] = index
     return index
+
+
+_PRIO_HIST_WARM_INTERVAL = 480  # seconds — refresh live-Priority auto-match history in the
+# background shortly before its 10-min TTL lapses, so a page load almost never pays the
+# ~10-20s cold-cache cost itself (only the very first request per key, per worker, ever does).
+
+def _warm_prio_hist_cache_loop():
+    while True:
+        time.sleep(_PRIO_HIST_WARM_INTERVAL)
+        try:
+            _fetch_receipt_amount_index(force=True)
+        except Exception as _e:
+            logger.warning(f"background receipt-hist warm failed: {_e}")
+        for _key in list(_prio_journal_hist_cache.keys()):
+            try:
+                _fetch_journal_history(_key[0], _key[1], force=True)
+            except Exception as _e:
+                logger.warning(f"background journal-hist warm({_key}) failed: {_e}")
+
+
+threading.Thread(target=_warm_prio_hist_cache_loop, daemon=True).start()
 
 
 def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0,
@@ -595,6 +627,12 @@ _TXN_DIRECTION_MAP = {
 }
 
 
+_BANK_LINES_CACHE_TTL = 60  # seconds — the raw BANKLINESA fetch measured ~3.5s per call and
+# doesn't need per-second freshness; a short cache absorbs repeat loads (page mount, manual
+# refresh, filter changes, post-action reloads) without ever showing data older than a minute.
+_bank_lines_cache = {}  # days -> (fetched_at, raw_lines)
+
+
 @app.route("/api/receipts/bank-transactions", methods=["GET"])
 def receipts_bank_transactions():
     """Bank statement lines from BANKLINESA that have not yet been reconciled (ERECONNUM eq 0)."""
@@ -610,16 +648,22 @@ def receipts_bank_transactions():
 
         branch_safe = branch.replace("'", "") if branch and branch != "all" else ""
 
-        flt = f"ERECONNUM eq 0 and CURDATE ge {since_date}"
-        r_lines = http_requests.get(
-            f"{_prio_url()}/BANKLINESA"
-            f"?$filter={flt}"
-            "&$select=CASHNAME,BPYEAR,CURDATE,DETAILS,CREDIT,DEBIT,BTCODE,FNCNUM,REF,BANKPAGE,KLINE"
-            "&$orderby=CURDATE desc&$top=500",
-            headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=30, verify=False,
-        )
-        r_lines.raise_for_status()
-        raw_lines = r_lines.json().get("value", [])
+        now_ts = time.time()
+        cache_entry = _bank_lines_cache.get(days)
+        if not refresh_gl and cache_entry and now_ts - cache_entry[0] < _BANK_LINES_CACHE_TTL:
+            raw_lines = cache_entry[1]
+        else:
+            flt = f"ERECONNUM eq 0 and CURDATE ge {since_date}"
+            r_lines = http_requests.get(
+                f"{_prio_url()}/BANKLINESA"
+                f"?$filter={flt}"
+                "&$select=CASHNAME,BPYEAR,CURDATE,DETAILS,CREDIT,DEBIT,BTCODE,FNCNUM,REF,BANKPAGE,KLINE"
+                "&$orderby=CURDATE desc&$top=500",
+                headers=_PRIO_READ_HEADERS, auth=_prio_auth(), timeout=30, verify=False,
+            )
+            r_lines.raise_for_status()
+            raw_lines = r_lines.json().get("value", [])
+            _bank_lines_cache[days] = (now_ts, raw_lines)
 
         if branch_safe:
             raw_lines = [l for l in raw_lines if (l.get("CASHNAME") or "").startswith(f"{branch_safe}-")]
