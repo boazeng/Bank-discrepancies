@@ -874,6 +874,10 @@ def bank_line_create_receipt():
         branchname = str(data.get("branchname", "")).strip()
         details    = str(data.get("details",    "")).strip()
         doc_type   = str(data.get("doc_type",   "receipt")).strip()
+        if doc_type == "receipt":
+            # Priority requires DETAILS="קבלה" on regular receipts — enforced
+            # server-side so an edited/cleared modal field can't slip through.
+            details = "קבלה"
 
         open_invoices = data.get("open_invoices", [])
 
