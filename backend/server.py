@@ -327,7 +327,8 @@ def _fetch_receipt_amount_index(deadline=None):
     return index
 
 
-def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0, deadline=None):
+def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", amount=0,
+                      deadline=None, invoice_deadline=None):
     """Wraps _find_auto_match_core(): when the suggestion is a plain receipt
     (TINVOICES — invoice_receipt/EINVOICES don't consume open invoices), also
     check for a single unambiguous open invoice at this exact amount so the
@@ -340,10 +341,19 @@ def _find_auto_match(details, direction, cashname, branchname="", bank_gl="", am
     customer costs a fresh round-trip, and a batch with many of them could
     still stack past a safe response time even with a short per-call timeout.
     Once the budget is spent, remaining lines just skip tier 3/invoice-lookup
-    silently — a missing suggestion, never a hung page."""
+    silently — a missing suggestion, never a hung page.
+
+    `invoice_deadline` is a SEPARATE budget just for the open-invoice lookup
+    below, deliberately not shared with `deadline` (tier 3's journal-history/
+    receipt-amount-index lookups): a batch with many cold journal-side
+    lookups ahead of a receipt in iteration order must never be able to
+    starve that receipt's invoice-closing suggestion, and vice versa — this
+    surfaced as the exact same receipt showing a matched invoice on one
+    request and losing it a few seconds later with nothing about the
+    underlying data having changed."""
     match = _find_auto_match_core(details, direction, cashname, branchname, bank_gl, amount, deadline)
     if match and match.get("action") == "receipt" and match.get("accname") and amount:
-        if deadline is None or _time_mod_now() < deadline:
+        if invoice_deadline is None or _time_mod_now() < invoice_deadline:
             invoices = _find_receipt_open_invoice(match["accname"], amount, branchname)
             if invoices:
                 match["open_invoices"] = invoices
@@ -703,6 +713,9 @@ def receipts_bank_transactions():
         # many of them could still stack past a safe response time. Once spent,
         # remaining lines just get no tier-3 suggestion — never a hung page.
         auto_match_deadline = _time_mod.time() + 20
+        # Separate budget for receipt open-invoice attachment (see _find_auto_match) —
+        # kept independent so journal-side lookups can never starve it.
+        invoice_lookup_deadline = _time_mod.time() + 20
 
         txns = []
         for line in raw_lines:
@@ -773,7 +786,7 @@ def receipts_bank_transactions():
                 "auto_match":       _find_auto_match(
                     line.get("DETAILS", ""), direction, cashname,
                     branchname=branch_code, bank_gl=cash_gl_map.get(cashname, ""), amount=amount,
-                    deadline=auto_match_deadline,
+                    deadline=auto_match_deadline, invoice_deadline=invoice_lookup_deadline,
                 ),
             })
 
@@ -2546,7 +2559,14 @@ def _query_open_invoices(accname, branchname="", session=None, timeout=20):
     return invoices
 
 
-_OPEN_INV_CACHE_TTL = 60
+_OPEN_INV_CACHE_TTL = 600  # match _PRIO_HIST_TTL — a customer's open invoices
+# don't change minute to minute, and a short TTL here meant almost every
+# request re-hit Priority cold for most customers, competing with tier-3
+# journal-history lookups for the same shared time budget and sometimes
+# losing that race — a receipt would show matched one request and, a few
+# seconds later with a different mix of cold lookups ahead of it in the
+# list, silently lose its invoice-closing suggestion despite nothing about
+# the underlying data having changed.
 _open_inv_cache = {}  # (accname, branchname) -> (fetched_at, [invoices])
 
 
