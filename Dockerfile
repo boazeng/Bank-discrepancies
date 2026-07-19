@@ -35,6 +35,10 @@ RUN cd backend/close_receipt && npm ci --omit=dev
 
 EXPOSE 5000
 
+# Single worker so the in-process Priority auto-match/bank-lines caches
+# (server.py) are shared across every request instead of split across
+# processes with no way to warm each other — 4 threads still gives plenty
+# of concurrency for this team's traffic.
 CMD ["gunicorn", "--chdir", "backend", "--bind", "0.0.0.0:5000", \
-     "--workers", "2", "--threads", "4", "--timeout", "120", \
+     "--workers", "1", "--threads", "4", "--timeout", "120", \
      "--access-logfile", "-", "server:app"]
