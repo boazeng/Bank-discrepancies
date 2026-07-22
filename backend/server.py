@@ -346,31 +346,35 @@ def _fetch_receipt_amount_index(deadline=None, force=False):
     return index
 
 
-_PRIO_HIST_WARM_INTERVAL = 480  # seconds — refresh live-Priority auto-match history in the
-# background shortly before its 10-min TTL lapses, so a page load almost never pays the
-# ~10-20s cold-cache cost itself (only the very first request per key, per worker, ever does).
+_PRIO_HIST_WARM_INTERVAL = 45  # seconds between warm passes — short, so a pass doing
+# several slow live-Priority calls back to back can never look like a hung/stalled
+# worker to anything supervising the process (gunicorn's own --timeout, Docker, etc.)
+# and so a restart mid-convergence loses at most a few seconds of progress, not a
+# whole multi-minute burst.
+_PRIO_HIST_WARM_BATCH = 3  # max combos resolved per pass, per cache — bounds any
+# single pass to roughly (3 x ~11s) seconds; convergence just takes a few more
+# passes instead of one long uninterrupted run.
 
 def _warm_prio_hist_cache_loop():
-    time.sleep(60)  # let the first minute of real traffic populate pending keys
-    # (see _prio_hist_pending_keys) before the first drain, instead of leaving
-    # every request slow for a full _PRIO_HIST_WARM_INTERVAL after each restart.
+    time.sleep(30)  # let the first traffic populate pending keys before the first drain
     while True:
+        now = time.time()
         try:
-            _fetch_receipt_amount_index(force=True)
+            ridx_age = now - _prio_receipt_hist_cache["fetched_at"]
+            if not _prio_receipt_hist_cache["index"] or ridx_age >= _PRIO_HIST_TTL - _PRIO_HIST_WARM_INTERVAL * 2:
+                _fetch_receipt_amount_index(force=True)
         except Exception as _e:
             logger.warning(f"background receipt-hist warm failed: {_e}")
 
-        now = time.time()
+        # Journal-history: resolve pending combos first (a real request wanted these
+        # and couldn't reach them in time), then combos about to go stale — capped at
+        # _PRIO_HIST_WARM_BATCH per pass so this loop iteration stays short.
         pending = set(_prio_hist_pending_keys)
         _prio_hist_pending_keys.difference_update(pending)
-        # Refresh anything not fresh, plus anything a real request just asked
-        # for but couldn't reach within its own 20s budget — this is what
-        # actually lets the cache converge over time instead of every
-        # request re-hitting the same per-request ceiling forever.
-        for _key in set(_prio_journal_hist_cache.keys()) | pending:
-            cached = _prio_journal_hist_cache.get(_key)
-            if cached and now - cached[0] < _PRIO_HIST_TTL and _key not in pending:
-                continue
+        stale = {k for k, v in _prio_journal_hist_cache.items() if now - v[0] >= _PRIO_HIST_TTL}
+        todo = list(pending | stale)
+        _prio_hist_pending_keys.update(todo[_PRIO_HIST_WARM_BATCH:])  # carry over to next pass
+        for _key in todo[:_PRIO_HIST_WARM_BATCH]:
             try:
                 _fetch_journal_history(_key[0], _key[1], force=True)
             except Exception as _e:
@@ -378,10 +382,10 @@ def _warm_prio_hist_cache_loop():
 
         oi_pending = set(_open_inv_pending_keys)
         _open_inv_pending_keys.difference_update(oi_pending)
-        for _key in set(_open_inv_cache.keys()) | oi_pending:
-            cached = _open_inv_cache.get(_key)
-            if cached and now - cached[0] < _OPEN_INV_CACHE_TTL and _key not in oi_pending:
-                continue
+        oi_stale = {k for k, v in _open_inv_cache.items() if now - v[0] >= _OPEN_INV_CACHE_TTL}
+        oi_todo = list(oi_pending | oi_stale)
+        _open_inv_pending_keys.update(oi_todo[_PRIO_HIST_WARM_BATCH:])  # carry over
+        for _key in oi_todo[:_PRIO_HIST_WARM_BATCH]:
             try:
                 accname, branchname = _key
                 invoices = _query_open_invoices(accname, branchname, session=_prio_fast, timeout=_PRIO_FAST_TIMEOUT)
