@@ -376,6 +376,19 @@ def _warm_prio_hist_cache_loop():
             except Exception as _e:
                 logger.warning(f"background journal-hist warm({_key}) failed: {_e}")
 
+        oi_pending = set(_open_inv_pending_keys)
+        _open_inv_pending_keys.difference_update(oi_pending)
+        for _key in set(_open_inv_cache.keys()) | oi_pending:
+            cached = _open_inv_cache.get(_key)
+            if cached and now - cached[0] < _OPEN_INV_CACHE_TTL and _key not in oi_pending:
+                continue
+            try:
+                accname, branchname = _key
+                invoices = _query_open_invoices(accname, branchname, session=_prio_fast, timeout=_PRIO_FAST_TIMEOUT)
+                _open_inv_cache[_key] = (time.time(), invoices)
+            except Exception as _e:
+                logger.warning(f"background open-invoice warm({_key}) failed: {_e}")
+
         time.sleep(_PRIO_HIST_WARM_INTERVAL)
 
 
@@ -2642,6 +2655,11 @@ _OPEN_INV_CACHE_TTL = 600  # match _PRIO_HIST_TTL — a customer's open invoices
 # list, silently lose its invoice-closing suggestion despite nothing about
 # the underlying data having changed.
 _open_inv_cache = {}  # (accname, branchname) -> (fetched_at, [invoices])
+# Same convergence problem as _prio_hist_pending_keys: a request only calls
+# this for customers it reaches before invoice_lookup_deadline runs out, so
+# with more distinct receipt-matched customers than fit in one request's
+# budget, most never get cached at all — the background warmer drains this.
+_open_inv_pending_keys = set()
 
 
 def _find_receipt_open_invoice(accname, amount, branchname):
@@ -2653,10 +2671,11 @@ def _find_receipt_open_invoice(accname, amount, branchname):
     receipt-matched line in the bulk transactions list (often the same
     recurring customer on several lines), so neither a single slow lookup
     nor repeat lookups for the same customer may stall the page."""
-    import time as _time_mod
     key = (accname, branchname)
-    now = _time_mod.time()
+    now = time.time()
     cached = _open_inv_cache.get(key)
+    if not cached or now - cached[0] >= _OPEN_INV_CACHE_TTL:
+        _open_inv_pending_keys.add(key)
     if cached and now - cached[0] < _OPEN_INV_CACHE_TTL:
         invoices = cached[1]
     else:
