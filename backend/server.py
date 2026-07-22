@@ -228,6 +228,12 @@ def _with_branch(acc, branch):
 _PRIO_HIST_TTL = 600  # seconds — Priority accounting history barely changes minute to minute
 _prio_journal_hist_cache = {}   # (gl_account, branchname) -> (fetched_at, [entries])
 _prio_receipt_hist_cache = {"fetched_at": 0.0, "index": {}}  # amount(2dp) -> {(accname, accdes)}
+# Combos a real request wanted but the shared 20s-per-request budget couldn't
+# reach (there can be more distinct gl/branch combos than fit in one budget) —
+# the background warmer drains this so those combos eventually get resolved
+# off the request path instead of every request re-hitting the same ceiling
+# forever without ever converging to a fully warm cache.
+_prio_hist_pending_keys = set()
 
 
 def _fetch_journal_history(gl_account, branchname, deadline=None, force=False):
@@ -244,6 +250,8 @@ def _fetch_journal_history(gl_account, branchname, deadline=None, force=False):
     key = (gl_account, branchname)
     now = time.time()
     cached = _prio_journal_hist_cache.get(key)
+    if not cached or now - cached[0] >= _PRIO_HIST_TTL:
+        _prio_hist_pending_keys.add(key)  # not fresh — flag for the background warmer
     if not force and cached and now - cached[0] < _PRIO_HIST_TTL:
         return cached[1]
     if not force and deadline is not None and now >= deadline:
@@ -343,17 +351,32 @@ _PRIO_HIST_WARM_INTERVAL = 480  # seconds — refresh live-Priority auto-match h
 # ~10-20s cold-cache cost itself (only the very first request per key, per worker, ever does).
 
 def _warm_prio_hist_cache_loop():
+    time.sleep(60)  # let the first minute of real traffic populate pending keys
+    # (see _prio_hist_pending_keys) before the first drain, instead of leaving
+    # every request slow for a full _PRIO_HIST_WARM_INTERVAL after each restart.
     while True:
-        time.sleep(_PRIO_HIST_WARM_INTERVAL)
         try:
             _fetch_receipt_amount_index(force=True)
         except Exception as _e:
             logger.warning(f"background receipt-hist warm failed: {_e}")
-        for _key in list(_prio_journal_hist_cache.keys()):
+
+        now = time.time()
+        pending = set(_prio_hist_pending_keys)
+        _prio_hist_pending_keys.difference_update(pending)
+        # Refresh anything not fresh, plus anything a real request just asked
+        # for but couldn't reach within its own 20s budget — this is what
+        # actually lets the cache converge over time instead of every
+        # request re-hitting the same per-request ceiling forever.
+        for _key in set(_prio_journal_hist_cache.keys()) | pending:
+            cached = _prio_journal_hist_cache.get(_key)
+            if cached and now - cached[0] < _PRIO_HIST_TTL and _key not in pending:
+                continue
             try:
                 _fetch_journal_history(_key[0], _key[1], force=True)
             except Exception as _e:
                 logger.warning(f"background journal-hist warm({_key}) failed: {_e}")
+
+        time.sleep(_PRIO_HIST_WARM_INTERVAL)
 
 
 threading.Thread(target=_warm_prio_hist_cache_loop, daemon=True).start()
