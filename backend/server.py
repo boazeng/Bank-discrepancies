@@ -80,15 +80,21 @@ http_requests.exceptions = requests.exceptions  # keep existing `http_requests.e
 
 # Separate session (no retries) for speculative/best-effort lookups that must
 # never block the request they're called from. http_requests' read=2 retries
-# mean a single slow filter can cost ~3x its timeout; on the main transactions
-# list that stacked across several bank accounts and blew past gunicorn's
-# worker timeout, taking the whole endpoint down. These calls fail fast
-# instead — a miss just means no suggestion, not a hung page.
+# mean a single slow filter can cost ~3x its timeout, so retries stay off here
+# regardless of the timeout value below — a miss just means no suggestion,
+# not a hung page.
 _prio_fast = requests.Session()
 _prio_fast.mount("https://", HTTPAdapter(max_retries=Retry(total=0), pool_connections=10, pool_maxsize=10))
 _prio_fast.mount("http://", HTTPAdapter(max_retries=Retry(total=0), pool_connections=10, pool_maxsize=10))
 _prio_fast.verify = False
-_PRIO_FAST_TIMEOUT = 6
+# Measured directly against production: FNCTRANS with $expand ~10.7s, CINVOICES
+# ~10s, EINVOICES ~3s. The previous value (6s) was BELOW that real latency, so
+# these queries could never actually succeed — every attempt timed out before
+# finishing, the cache never populated, and every request re-paid the same
+# doomed attempt. 20s gives real headroom above the measured cost; the calls
+# that matter most now run from the background warmer anyway (off the request
+# path), where a longer timeout costs nothing a user waits on.
+_PRIO_FAST_TIMEOUT = 20
 
 import threading
 _gl_cache_lock = threading.Lock()  # serialize bank-GL cache writes during parallel resolution
